@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+"""NOTICE: This is gen by Gemini for a solid look at the unlearning process (there are 3 orders to run), probably will not be using outside of getting ideas"""
+
 # --- 1. MODEL AND DATA ---
 # In your actual project, these would be in separate files (e.g., src/models/stgcn.py)
 

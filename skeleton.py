@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-"""NOTICE: This is gen by Gemini for a solid look at the unlearning process (there are 3 orders to run), probably will not be using outside of getting ideas"""
+"""NOTICE: This is gen by Gemini for a solid look at the unlearning process(there are 3 orders to run), probably will not be using outside of getting ideas"""
 
 # --- 1. MODEL AND DATA ---
 # In your actual project, these would be in separate files (e.g., src/models/stgcn.py)
@@ -116,6 +116,8 @@ def perform_temporal_generative_replay(model, forget_sample):
         surrogate_sample = reconstruction + torch.randn_like(reconstruction) * 0.01
     return surrogate_sample
 
+
+
 def calculate_sa_ts_loss(model, original_model, fim_diagonal, surrogate_data, retain_data, lambda_reg):
     """
     (Section 2.4) Calculates the overall SA-TS objective function (Eq. 3).
@@ -164,7 +166,7 @@ def main():
 
     # 1. Define concept and partition data
     concept_to_forget = "Data from faulty sensor node #50"
-    forget_indices, retain_indices = discover_motifs_pepa(dataset, concept_to_forget)
+    forget_indices, retain_indices = discover_motifs_pepa(dataset, concept_to_forget)  
     
     forget_set = torch.utils.data.Subset(dataset, forget_indices)
     retain_set = torch.utils.data.Subset(dataset, retain_indices)

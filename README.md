@@ -3,7 +3,7 @@
 - By utilizing the motif(s) detection and data sequence generation, unlearning in Time Series can be achieved via the act of replacing corrupted/unwanted data with generated ones.
 - This framework inlcudes:
   + PA-EW (Population-Aware Elastic Weight Consolidation):
-  + T_GR (TTemporal Generative Replay):
+  + T_GR (Temporal Generative Replay):
   + PEPA: A motif detection technique.
   
 # TO DO LIST:
@@ -14,5 +14,5 @@
 ### Core:
 1. Implement PEPA.
 2. Optimize MMD, FiM calculations.
-
-....
+n?. MIA attacks.
+...

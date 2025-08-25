@@ -13,4 +13,4 @@
     + Need: 
         1. Persistent homology 
         2. topological data analysis (TDA)
-***NOTICE: Use notebooks to visualize the motifs discovered***
+***NOTICE: Use notebooks to visualize the motifs discovered (giotto-tda)***

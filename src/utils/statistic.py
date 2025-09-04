@@ -11,7 +11,7 @@ import numpy as np
 from scipy.signal import welch
 from scipy.stats import pearsonr
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore') # Ignore warnings for cleaner output
 
 def get_marginal_distribution(data_tensor):
     """Get flattened distribution of all values"""

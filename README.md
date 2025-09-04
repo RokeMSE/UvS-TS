@@ -16,3 +16,6 @@
 2. Optimize MMD, FiM calculations.
 n?. MIA attacks.
 ...
+
+
+### NOTICE: For functions called from different file, use this for safety `import src/{folder_name}/{file_name}`

@@ -17,5 +17,6 @@
 n?. MIA attacks.
 ...
 
+`Data Flow: PEMS-BAY → Data Utils → Motif Discovery → T-GR + PA-EWC → SA-TS Objective`
 
 ### NOTICE: For functions called from different file, use this for safety `import src/{folder_name}/{file_name}`

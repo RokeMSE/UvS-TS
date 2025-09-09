@@ -167,15 +167,17 @@ class PopulationAwareEWC:
 # ------------------- FIM Calculation -------------------
     def calculate_pa_fim(self, model: nn.Module, 
                         retain_data_loader: DataLoader,
+                        A_wave: torch.Tensor,  # Adjacency matrix for STGCN
                         weights: Optional[Dict[str, float]] = None,
                         max_samples: int = 1000,
                         batch_accumulation: int = 4) -> Dict[str, torch.Tensor]:
         """
-        Enhanced PA-FIM calculation with memory management and efficiency improvements
+        Enhanced PA-FIM calculation for STGCN with proper data handling
         
         Params:
-            model: The model to calculate FIM for
-            retain_data_loader: DataLoader for retain set
+            model: The STGCN model to calculate FIM for
+            retain_data_loader: DataLoader for retain set 
+            A_wave: Normalized adjacency matrix for STGCN
             weights: Weights for L_pop statistics
             max_samples: Maximum samples to use (for memory management)
             batch_accumulation: Accumulate gradients over multiple batches
@@ -199,30 +201,30 @@ class PopulationAwareEWC:
                 if sample_count >= max_samples:
                     break
                     
-                # Extract data from batch
+                # Extract training input and target from batch
+                # Expected format from your generate_dataset: (input, target)
                 if isinstance(data_batch, (list, tuple)):
-                    data_batch = data_batch[0]
-                data_batch = data_batch.to(self.device)
+                    X_batch, y_batch = data_batch
+                    X_batch = X_batch.to(self.device)  # (batch, num_nodes, num_timesteps_input, num_features)
+                    y_batch = y_batch.to(self.device)  # (batch, num_nodes, num_timesteps_output)
+                else:
+                    # Single tensor - need to extract input/target somehow
+                    data_batch = data_batch.to(self.device)
+                    X_batch = data_batch
+                    y_batch = data_batch  # Use same data as target (reconstruction task)
                 
                 # Skip if batch is too small
-                if data_batch.shape[0] < 2:
+                if X_batch.shape[0] < 2:
                     continue
                 
                 model.zero_grad()
                 
-                # Forward pass through model
-                if self.model_type == "stgcn":
-                    model_output = self._forward_stgcn(model, data_batch)
-                elif self.model_type == "rnn_vae":
-                    model_output = self._forward_rnn_vae(model, data_batch)
-                elif self.model_type == "diffusion":
-                    model_output = self._forward_diffusion(model, data_batch)
-                else:
-                    model_output = model(data_batch)
+                # Forward pass through STGCN model
+                model_output = model(A_wave, X_batch)  # Output: (batch, num_nodes, num_timesteps_output)
                 
                 # Calculate L_pop loss
                 loss = self.calculate_L_pop(
-                    model_output, data_batch, weights, statistics_subset
+                    model_output, y_batch, weights, statistics_subset
                 )
                 
                 if loss.requires_grad:
@@ -233,7 +235,7 @@ class PopulationAwareEWC:
                         if param.grad is not None:
                             fim_diagonal[name] += param.grad.data.pow(2)
                 
-                sample_count += data_batch.shape[0]
+                sample_count += X_batch.shape[0]
                 batch_count += 1
                 
                 # Clear intermediate computations
@@ -259,17 +261,20 @@ class PopulationAwareEWC:
         return fim_diagonal
     
 
-    def _forward_stgcn(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor:
-        """Handle STGCN-specific forward pass"""
+    """ def _forward_stgcn(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor: # Forcasting
         try:
-            # STGCN might need additional arguments
-            if hasattr(model, 'forward') and hasattr(model, 'edge_index'):
-                return model(data, model.edge_index)
+            if hasattr(model, 'A_hat') and model.A_hat is not None:
+                return model.forward(data, model.A_hat)
+            elif hasattr(model, 'forward'):
+                # Try to call with adjacency matrix if available
+                return model.forward(data, getattr(model, 'edge_index', None))
             else:
                 return model(data)
-        except:
-            return model(data)
-    
+        except Exception as e:
+            print(f"Warning in STGCN forward: {e}")
+            # Fallback: return input as dummy output
+            return data
+    """
 
     def _forward_rnn_vae(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor:
         """Handle RNN-VAE specific forward pass"""

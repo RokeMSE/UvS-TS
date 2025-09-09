@@ -255,7 +255,7 @@ class TemporalGenerativeReplay:
 # -------------- Example usage function -------------------------
 def create_surrogate_dataset(model: nn.Module, forget_loader: torch.utils.data.DataLoader,
                            d_f: Union[int, list], model_type: str = "stgcn",
-                           edge_index: Optional[torch.Tensor] = None) -> torch.utils.data.TensorDataset:
+                           edge_index: Optional[torch.Tensor] = None) -> torch.utils.data.TensorDataset: # edge_index is only for STGCN, it is the adjacency matrix
     """
     Create a dataset of surrogate samples for the entire forget set
     """

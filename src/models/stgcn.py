@@ -114,6 +114,12 @@ class STGCN(nn.Module):
         self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
         self.fully = nn.Linear((num_timesteps_input - 2 * 5) * 64,
                                num_timesteps_output)
+        self.config = {
+            "num_nodes": num_nodes,
+            "num_features": num_features,
+            "num_timesteps_input": num_timesteps_input,
+            "num_timesteps_output": num_timesteps_output
+        }
 
     def forward(self, A_hat, X):
         """

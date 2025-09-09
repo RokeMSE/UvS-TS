@@ -40,7 +40,7 @@ class PopulationAwareEWC:
         """
         if weights is None:
             weights = self.default_weights.copy()
-            
+                
         # Default to all statistics if not specified
         if statistics_subset is None:
             statistics_subset = ['marginal', 'acf']  # Start with most important ones

@@ -1,4 +1,3 @@
-# src/unlearning/t_gr.py - Enhanced Implementation
 import torch
 import torch.nn as nn
 import numpy as np
@@ -61,7 +60,7 @@ class TemporalGenerativeReplay:
                 reconstructed = model.forward_with_mask(masked_data, faulty_node_idx)
             else:
                 # Standard forward pass - model should handle missing data
-                reconstructed = model(masked_data)
+                reconstructed = model(edge_index, masked_data)
                 
             # For STGCN -> might need to handle graph structure
             if edge_index is not None:
@@ -69,68 +68,6 @@ class TemporalGenerativeReplay:
                 reconstructed = self._apply_graph_constraints(reconstructed, edge_index, faulty_node_idx)
                 
         return reconstructed
-    
-
-    def reconstruct_rnn_vae(self, model: nn.Module, masked_data: torch.Tensor,
-                           d_f: list) -> torch.Tensor:
-        """
-        Reconstruct using RNN-VAE with latent space interpolation
-        """
-        model.eval()
-        
-        with torch.no_grad():
-            # Encode the partially observed sequence
-            if hasattr(model, 'encode'):
-                mu, logvar = model.encode(masked_data)
-                z = model.reparameterize(mu, logvar)
-                reconstructed = model.decode(z)
-            else:
-                # Standard VAE forward
-                reconstructed, mu, logvar = model(masked_data)
-                
-        return reconstructed
-    
-
-    def reconstruct_diffusion(self, model: nn.Module, masked_data: torch.Tensor,
-                             d_f: list, num_steps: int = 50) -> torch.Tensor:
-        """
-        Reconstruct using diffusion model with conditional generation
-        Following CSDI approach for time series imputation
-        """
-        model.eval()
-        
-        # Create conditioning mask
-        cond_mask = torch.ones_like(masked_data)
-        if isinstance(d_f[0], int):
-            # Node-level masking
-            for idx in d_f:
-                cond_mask[:, :, idx] = 0.0
-        else:
-            # Temporal segment masking
-            for start, end in d_f:
-                cond_mask[:, start:end, :] = 0.0
-        
-        with torch.no_grad():
-            # Initialize with noise for masked regions
-            x_t = torch.randn_like(masked_data)
-            x_t = masked_data * cond_mask + x_t * (1 - cond_mask)
-            
-            # Reverse diffusion process
-            for t in reversed(range(num_steps)):
-                t_tensor = torch.full((masked_data.shape[0],), t, dtype=torch.long)
-                
-                if hasattr(model, 'p_sample'):
-                    x_t = model.p_sample(x_t, t_tensor, cond_mask, masked_data)
-                else:
-                    # Standard denoising step
-                    noise_pred = model(x_t, t_tensor, cond_mask)
-                    x_t = self._denoise_step(x_t, noise_pred, t, num_steps)
-                    
-                # Apply conditioning
-                x_t = masked_data * cond_mask + x_t * (1 - cond_mask)
-        
-        return x_t
-    
 
 # --------------------- Main Steps -------------------------
     def _apply_graph_constraints(self, data: torch.Tensor, edge_index: torch.Tensor,
@@ -141,8 +78,8 @@ class TemporalGenerativeReplay:
         
         if len(neighbors) > 0:
             # Weighted average of neighbor values
-            neighbor_data = data[:, :, neighbors]
-            data[:, :, faulty_node_idx] = neighbor_data.mean(dim=2)
+            neighbor_data = data[:, neighbors, :]
+            data[:, faulty_node_idx, :] = neighbor_data.mean(dim=1)
             
         return data
     
@@ -211,6 +148,10 @@ class TemporalGenerativeReplay:
         Returns:
             Neutralized surrogate data
         """
+        # FIX: Determine device from model and move input tensor to it
+        device = next(model.parameters()).device
+        forget_sample = forget_sample.to(device)
+
         # Step 1: Create mask for unwanted patterns
         masked_data = self.create_mask(forget_sample, d_f)
         

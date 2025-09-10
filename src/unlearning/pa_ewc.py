@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional, List, Union
 import numpy as np
-from src.utils.statistic import (get_marginal_distribution, get_cross_correlations,
+from torch.utils.data import DataLoader
+from utils.statistic import (get_marginal_distribution, get_cross_correlations,
                                 get_power_spectral_density, get_autocorrelation)
-from src.utils.losses import mmd_loss
+from utils.losses import mmd_loss
 
 class PopulationAwareEWC:
     """
@@ -38,7 +39,13 @@ class PopulationAwareEWC:
             weights: Custom weights for statistics
             statistics_subset: Subset of statistics to compute for efficiency
         """
-        if weights is None:
+        # FIX: Add a check to ensure weights is a dictionary or None
+        if not isinstance(weights, (dict, type(None))):
+            # If weights is not a dict or None, default to the class weights.
+            # This handles cases where arguments might be passed incorrectly.
+            print(f"Warning: `weights` argument in calculate_L_pop was not a dictionary. Defaulting. Got type: {type(weights)}")
+            weights = self.default_weights.copy()
+        elif weights is None:
             weights = self.default_weights.copy()
                 
         # Default to all statistics if not specified
@@ -125,7 +132,7 @@ class PopulationAwareEWC:
         try:
             if data.shape[1] <= max_lag:  # Not enough data for meaningful ACF
                 return None
-            return get_autocorrelation(data, lag=min(max_lag, data.shape[1] // 4))
+            return get_autocorrelation(data, max_lag=min(max_lag, data.shape[1] // 4))
         except Exception as e:
             print(f"Warning: Failed to compute autocorrelation: {e}")
             return None
@@ -260,22 +267,6 @@ class PopulationAwareEWC:
         
         return fim_diagonal
     
-
-    """ def _forward_stgcn(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor: # Forcasting
-        try:
-            if hasattr(model, 'A_hat') and model.A_hat is not None:
-                return model.forward(data, model.A_hat)
-            elif hasattr(model, 'forward'):
-                # Try to call with adjacency matrix if available
-                return model.forward(data, getattr(model, 'edge_index', None))
-            else:
-                return model(data)
-        except Exception as e:
-            print(f"Warning in STGCN forward: {e}")
-            # Fallback: return input as dummy output
-            return data
-    """
-
     def _forward_rnn_vae(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor:
         """Handle RNN-VAE specific forward pass"""
         try:

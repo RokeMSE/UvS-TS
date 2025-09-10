@@ -48,25 +48,34 @@ class TemporalGenerativeReplay:
 # ----------------- Model reconstruction --------------------
 
     def reconstruct_stgcn(self, model: nn.Module, masked_data: torch.Tensor,
-                         faulty_node_idx: int, edge_index: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Reconstruct using STGCN model with spatial-temporal inpainting
-        """
+                        faulty_node_idx: int, A_hat: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Reconstruct using STGCN model"""
         model.eval()
         
+        # Ensure masked_data is 4D: (B, N, T, F)
+        if masked_data.dim() == 3:
+            masked_data = masked_data.unsqueeze(-1)
+        elif masked_data.dim() == 2:
+            masked_data = masked_data.unsqueeze(0).unsqueeze(-1)
+        
         with torch.no_grad():
-            if hasattr(model, 'forward_with_mask'):
-                # If model supports masked forward pass
-                reconstructed = model.forward_with_mask(masked_data, faulty_node_idx)
+            if hasattr(model, 'forward_unlearning_compatible'):
+                reconstructed = model.forward_unlearning_compatible(masked_data)
+            elif A_hat is not None:
+                reconstructed = model(A_hat, masked_data)
             else:
-                # Standard forward pass - model should handle missing data
-                reconstructed = model(edge_index, masked_data)
+                raise ValueError("Either model must have forward_unlearning_compatible or A_hat must be provided")
                 
-            # For STGCN -> might need to handle graph structure
-            if edge_index is not None:
-                # Apply graph convolution constraints
-                reconstructed = self._apply_graph_constraints(reconstructed, edge_index, faulty_node_idx)
-                
+            # Handle shape matching for reconstruction
+            if reconstructed.shape[2] != masked_data.shape[2]:
+                target_len = masked_data.shape[2]
+                if reconstructed.shape[2] < target_len:
+                    pad_size = target_len - reconstructed.shape[2]
+                    last_vals = reconstructed[:, :, -1:].repeat(1, 1, pad_size)
+                    reconstructed = torch.cat([reconstructed, last_vals], dim=2)
+                else:
+                    reconstructed = reconstructed[:, :, :target_len]
+                    
         return reconstructed
 
 # --------------------- Main Steps -------------------------

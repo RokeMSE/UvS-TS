@@ -31,7 +31,7 @@ class PopulationAwareEWC:
                        weights: Optional[Dict[str, float]] = None,
                        statistics_subset: Optional[List[str]] = None) -> torch.Tensor:
         """
-        Enhanced L_pop calculation with better error handling and efficiency options
+        L_pop calculation with better error handling and efficiency options
         
         Params:
             model_output: Generated data (batch, seq_len, num_nodes)
@@ -39,6 +39,16 @@ class PopulationAwareEWC:
             weights: Custom weights for statistics
             statistics_subset: Subset of statistics to compute for efficiency
         """
+        # Convert shapes for statistical analysis - Expected: (B, T, N)
+        if model_output.dim() == 3:
+            # Check if it's (B, N, T) and convert to (B, T, N)
+            if model_output.shape[1] > model_output.shape[2]:
+                model_output = model_output.transpose(1, 2)
+        
+        if ground_truth_data.dim() == 3:
+            if ground_truth_data.shape[1] > ground_truth_data.shape[2]:
+                ground_truth_data = ground_truth_data.transpose(1, 2)
+
         # FIX: Add a check to ensure weights is a dictionary or None
         if not isinstance(weights, (dict, type(None))):
             # If weights is not a dict or None, default to the class weights.

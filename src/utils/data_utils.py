@@ -25,7 +25,7 @@ class PEMSBAYDataset(Dataset):
         return self.input_data[idx]
 
 
-def prepare_local_data_for_unlearning(X, faulty_node_idx, num_timesteps_input=12, 
+def prepare_unlearning_data(X, faulty_node_idx, num_timesteps_input=12, 
                                     num_timesteps_output=3, train_split=0.8, 
                                     batch_size=32, forget_strategy="node_activity"):
     """

@@ -1,4 +1,7 @@
-# Run the 3 Orders from the Initial Models using files from the unlearning folder
+""" Run the 3 Orders from the Initial Models using files from the unlearning folder
+- Combine Components: Load the pre-trained model ($θ*$).
+- Partition Data: Use your PEPA implementation to get $D_f$ and $D_r$.
+- Calculate FIM: Compute the PA-FIM ($F^T$) using $D_r$ and your PA-EWC module. """
 import torch
 import torch.nn as nn
 import numpy as np
@@ -6,12 +9,12 @@ from torch.utils.data import DataLoader
 import os
 
 # Components
-from src.models.stgcn import STGCN
-from src.utils.data_loader import load_data_PEMS_BAY
-from src.utils.data_utils import prepare_unlearning_data, fix_data_shapes
-from src.unlearning.pa_ewc import PopulationAwareEWC
-from src.unlearning.t_gr import TemporalGenerativeReplay
-from src.unlearning.motif_def import discover_motifs_proxy
+from models.stgcn import STGCN
+from utils.data_loader import load_data_PEMS_BAY
+from utils.data_utils import prepare_unlearning_data
+from unlearning.pa_ewc import PopulationAwareEWC
+from unlearning.t_gr import TemporalGenerativeReplay
+from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj
 import sys
 sys.path.append('src')
@@ -150,11 +153,24 @@ class SATimeSeries:
         return history
     
     def compute_sa_ts_objective(self, surrogate_batch, retain_batch, lambda_ewc):
-        """Compute SA-TS objective (Equation 3)"""
+        """Compute SA-TS objective"""
+        # Ensure batches are 4D for model input
+        if surrogate_batch.dim() == 3:
+            surrogate_batch = surrogate_batch.unsqueeze(-1)
+        if retain_batch.dim() == 3:
+            retain_batch = retain_batch.unsqueeze(-1)
         
-        # Surrogate loss (maximize likelihood -> minimize negative log-likelihood)
+        # Forward passes
         surrogate_pred = self.model.forward_unlearning_compatible(surrogate_batch)
-        surrogate_loss = nn.MSELoss()(surrogate_pred, surrogate_batch[:, -surrogate_pred.shape[1]:, :])
+        retain_pred = self.model.forward_unlearning_compatible(retain_batch)
+        
+        # Prepare targets - use last time steps matching prediction length
+        surrogate_target = surrogate_batch[:, :, -surrogate_pred.shape[2]:, 0]  # First feature
+        retain_target = retain_batch[:, :, -retain_pred.shape[2]:, 0]
+        
+        # Calculate losses
+        surrogate_loss = nn.MSELoss()(surrogate_pred, surrogate_target)
+        retain_loss = nn.MSELoss()(retain_pred, retain_target)
         
         # EWC penalty
         if self.fim_diagonal is not None:
@@ -164,16 +180,12 @@ class SATimeSeries:
         else:
             ewc_penalty = torch.tensor(0.0, device=self.device)
         
-        # Retain loss (minimize to preserve performance)
-        retain_pred = self.model.forward_unlearning_compatible(retain_batch)
-        retain_loss = nn.MSELoss()(retain_pred, retain_batch[:, -retain_pred.shape[1]:, :])
-        
-        # Total loss: -surrogate + ewc + retain (following Eq. 3)
+        # Total SA-TS objective
         total_loss = -surrogate_loss + ewc_penalty + retain_loss
         
         return {
             'total_loss': total_loss,
-            'surrogate_loss': surrogate_loss,
+            'surrogate_loss': surrogate_loss, 
             'ewc_penalty': ewc_penalty,
             'retain_loss': retain_loss
         }

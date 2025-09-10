@@ -3,8 +3,8 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-from src.models.stgcn import STGCN
-from src.utils.data_loader import load_data_PEMS_BAY
+from models.stgcn import STGCN
+from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 
 num_timesteps_input = 12

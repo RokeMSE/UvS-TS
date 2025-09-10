@@ -132,3 +132,21 @@ class STGCN(nn.Module):
         out3 = self.last_temporal(out2)
         out4 = self.fully(out3.reshape((out3.shape[0], out3.shape[1], -1)))
         return out4
+    
+    def forward_unlearning_compatible(self, X):
+        """Forward pass"""
+        # Handle different input shapes
+        if X.dim() == 3:  # (B, N, T) -> add feature dimension
+            X = X.unsqueeze(-1)
+        elif X.dim() == 2:  # (N, T) -> add batch and feature dimensions
+            X = X.unsqueeze(0).unsqueeze(-1)
+            
+        # Use stored adjacency matrix
+        if not hasattr(self, '_stored_A_hat'):
+            raise ValueError("Adjacency matrix not set. Call set_adjacency_matrix() first.")
+        
+        return self.forward(self._stored_A_hat, X)
+
+    def set_adjacency_matrix(self, A_hat):
+        """Store adjacency matrix for unlearning"""
+        self._stored_A_hat = A_hat

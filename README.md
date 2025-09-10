@@ -6,7 +6,7 @@
   + T_GR (Temporal Generative Replay):
   + PEPA: A motif detection technique.
   
-# TO DO LIST:
+## TO DO LIST:
 1. Load Datasets.
 2. Train initial Models.
 ...
@@ -17,6 +17,11 @@
 n?. MIA attacks.
 ...
 
-`Data Flow: PEMS-BAY → Data Utils → Motif Discovery → T-GR + PA-EWC → SA-TS Objective`
+# Pipeline
+``` 
+Data Loading → Model Training → Unlearning Process → Evaluation
+     ↓              ↓              ↓              ↓
+data_loader.py → stgcn.py → unlearn.py → evaluate.py
+```
 
 ### NOTICE: For functions called from different file, use this for safety `import src/{folder_name}/{file_name}`

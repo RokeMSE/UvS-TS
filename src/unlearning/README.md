@@ -14,3 +14,7 @@
         1. Persistent homology 
         2. topological data analysis (TDA)
 ***NOTICE: Use notebooks to visualize the motifs discovered (giotto-tda)***
+
+## Tensor Shape: PLEASE KEEP IN MIND
+- Model inputs: Always `(B, N, T, F)`
+- Model outputs: Always `(B, N, T)`

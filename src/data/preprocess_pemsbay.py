@@ -7,12 +7,11 @@ def get_normalized_adj(A):
     """
     A = A + np.diag(np.ones(A.shape[0], dtype=np.float32))
     D = np.array(np.sum(A, axis=1)).reshape((-1,))
-    D[D <= 10e-5] = 10e-5    # Prevent infs
+    D[D <= 10e-5] = 10e-5    # Prevent divde by 0
     diag = np.reciprocal(np.sqrt(D))
     A_wave = np.multiply(np.multiply(diag.reshape((-1, 1)), A),
                          diag.reshape((1, -1)))
     return A_wave
-
 
 def generate_dataset(X, num_timesteps_input, num_timesteps_output):
     """
@@ -30,8 +29,7 @@ def generate_dataset(X, num_timesteps_input, num_timesteps_output):
     # Generate the beginning index and the ending index of a sample, which
     # contains (num_points_for_training + num_points_for_predicting) points
     indices = [(i, i + (num_timesteps_input + num_timesteps_output)) for i
-               in range(X.shape[2] - (
-                num_timesteps_input + num_timesteps_output) + 1)]
+               in range(X.shape[2] - (num_timesteps_input + num_timesteps_output) + 1)]
 
     # Save samples
     features, target = [], []
@@ -41,5 +39,4 @@ def generate_dataset(X, num_timesteps_input, num_timesteps_output):
                 (0, 2, 1)))
         target.append(X[:, 0, i + num_timesteps_input: j])
 
-    return torch.from_numpy(np.array(features)), \
-           torch.from_numpy(np.array(target))
+    return torch.from_numpy(np.array(features)), torch.from_numpy(np.array(target))

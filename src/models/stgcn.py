@@ -133,7 +133,7 @@ class STGCN(nn.Module):
         out4 = self.fully(out3.reshape((out3.shape[0], out3.shape[1], -1)))
         return out4
     
-    def forward_unlearning_compatible(self, X):
+    def forward_unlearning(self, X):
         """Forward pass"""
         # Handle different input shapes
         if X.dim() == 3:  # (B, N, T) -> add feature dimension

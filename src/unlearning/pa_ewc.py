@@ -49,7 +49,6 @@ class PopulationAwareEWC:
             if ground_truth_data.shape[1] > ground_truth_data.shape[2]:
                 ground_truth_data = ground_truth_data.transpose(1, 2)
 
-        # FIX: Add a check to ensure weights is a dictionary or None
         if not isinstance(weights, (dict, type(None))):
             # If weights is not a dict or None, default to the class weights.
             # This handles cases where arguments might be passed incorrectly.
@@ -67,7 +66,7 @@ class PopulationAwareEWC:
         
         # Ensure tensors are on the same device
         model_output = model_output.to(self.device)
-        ground_truth_data = ground_truth_data.to(self.device)
+        ground_truth_data = ground_truth_data.to(self.device) 
         
         try:
             # 1. Marginal Value Distributions (most fundamental)

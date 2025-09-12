@@ -161,8 +161,8 @@ class SATimeSeries:
             retain_batch = retain_batch.unsqueeze(-1)
         
         # Forward passes
-        surrogate_pred = self.model.forward_unlearning_compatible(surrogate_batch)
-        retain_pred = self.model.forward_unlearning_compatible(retain_batch)
+        surrogate_pred = self.model.forward_unlearning(surrogate_batch)
+        retain_pred = self.model.forward_unlearning(retain_batch)
         
         # Prepare targets - use last time steps matching prediction length
         surrogate_target = surrogate_batch[:, :, -surrogate_pred.shape[2]:, 0]  # First feature

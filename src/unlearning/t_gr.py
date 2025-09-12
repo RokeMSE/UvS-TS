@@ -46,7 +46,6 @@ class TemporalGenerativeReplay:
         return masked_data
     
 # ----------------- Model reconstruction --------------------
-
     def reconstruct_stgcn(self, model: nn.Module, masked_data: torch.Tensor,
                         faulty_node_idx: int, A_hat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Reconstruct using STGCN model"""
@@ -64,7 +63,7 @@ class TemporalGenerativeReplay:
             elif A_hat is not None:
                 reconstructed = model(A_hat, masked_data)
             else:
-                raise ValueError("Either model must have forward_unlearning_compatible or A_hat must be provided")
+                raise ValueError("Either model must have forward_unlearning or A_hat must be provided")
                 
             # Handle shape matching for reconstruction
             if reconstructed.shape[2] != masked_data.shape[2]:
@@ -157,7 +156,7 @@ class TemporalGenerativeReplay:
         Returns:
             Neutralized surrogate data
         """
-        # FIX: Determine device from model and move input tensor to it
+        # Determine device from model and move input tensor to it
         device = next(model.parameters()).device
         forget_sample = forget_sample.to(device)
 

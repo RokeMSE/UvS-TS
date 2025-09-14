@@ -5,7 +5,17 @@
   + PA-EW (Population-Aware Elastic Weight Consolidation):
   + T_GR (Temporal Generative Replay):
   + PEPA: A motif detection technique.
-  
+
+- The full Framework can be visualized as an Objective Function which of consists 3 Orders:
+$$
+\mathcal{L}_{SA-TS} = \mathbb{E}_{x_f \sim q(x|c_f)}[\log p(x_f|c_f)] - \lambda \sum_{i}\frac{F_i^{T}}{2}(\theta_{i}-\theta_{i}^{*})^{2} + \mathbb{E}_{x_r \sim p(x|c_r)}[\log p(x_r|c_r)]
+$$
+
+- **Where**:
+  1. **FIRST ORDER**:  
+  2. **SECOND ORDER**: Fisher Information is used to make sure the model performance is retain with the retain set $D_r$.
+  3. **THIRD ORDER**: 
+
 ## TO DO LIST:
 1. Load Datasets.
 2. Train initial Models.

@@ -16,8 +16,6 @@ from unlearning.pa_ewc import PopulationAwareEWC
 from unlearning.t_gr import TemporalGenerativeReplay
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj
-import sys
-sys.path.append('src')
 
 class SATimeSeries:
     """Complete SA-TS Framework Integration"""
@@ -208,9 +206,8 @@ def main():
     train_data = X[:, :, :split_line]
     
     # Convert to proper format
-    training_input, training_target = fix_data_shapes(
-        torch.from_numpy(train_data), num_timesteps_input, num_timesteps_output
-    )
+    training_input, training_target = prepare_unlearning_data(
+        train_data, num_timesteps_input, num_timesteps_output)
     
     print(f"Training input shape: {training_input.shape}")
     print(f"Training target shape: {training_target.shape}")

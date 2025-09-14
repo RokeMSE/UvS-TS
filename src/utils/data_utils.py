@@ -44,7 +44,7 @@ def prepare_unlearning_data(X, faulty_node_idx, num_timesteps_input=12,
         dict containing train_loader, test_loader, forget_loader, retain_loader, 
         and the split indices for debugging
     """
-    # Step 1: Convert raw data to training format using your preprocessing
+    # Step 1: Convert raw data to training format 
     training_input, training_target = generate_dataset(
         X, num_timesteps_input=num_timesteps_input, 
         num_timesteps_output=num_timesteps_output

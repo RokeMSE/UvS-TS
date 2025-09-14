@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from dtaidistance import dtw
 
-def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold): # Sample parameters...
+def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
     """
     This function identifies a "concept" as any data involving a USER PROVIDES INFO about what to forget.
     

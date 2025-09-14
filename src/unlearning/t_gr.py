@@ -8,7 +8,6 @@ class TemporalGenerativeReplay:
     Self-Contained Temporal Generative Replay (T-GR) implementation
     Uses the model's own capabilities for reconstruction and neutralization
     """
-
     def __init__(self, model_type: str = "stgcn"): # Change the model type for different tests
         """
         Params:
@@ -170,19 +169,11 @@ class TemporalGenerativeReplay:
             else:
                 faulty_node_idx = d_f
             reconstructed = self.reconstruct_stgcn(model, masked_data, faulty_node_idx, edge_index)
-            
-        elif self.model_type == "rnn_vae":
-            reconstructed = self.reconstruct_rnn_vae(model, masked_data, d_f)
-            
-        elif self.model_type == "diffusion":
-            reconstructed = self.reconstruct_diffusion(model, masked_data, d_f)
-            
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
         
         # Step 3: Create surrogate by replacing only the faulty parts
         surrogate_sample = forget_sample.clone()
-        
         if isinstance(d_f, int):
             d_f = [d_f]
             
@@ -195,7 +186,7 @@ class TemporalGenerativeReplay:
         
         # Step 4: Add error-minimizing noise
         surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, d_f, noise_scale=0.01
+            surrogate_sample, d_f, noise_scale=0.01 # Noise scale can be adjusted to control the amount 
         )
         
         return surrogate_sample

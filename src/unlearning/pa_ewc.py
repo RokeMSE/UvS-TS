@@ -184,19 +184,15 @@ class PopulationAwareEWC:
     def calculate_pa_fim(self, model: nn.Module, 
                         retain_data_loader: DataLoader,
                         A_wave: torch.Tensor,  # Adjacency matrix for STGCN
-                        weights: Optional[Dict[str, float]] = None,
-                        max_samples: int = 1000,
-                        batch_accumulation: int = 4) -> Dict[str, torch.Tensor]:
+                        max_samples: int = 1000) -> Dict[str, torch.Tensor]:
         """
-        Enhanced PA-FIM calculation for STGCN with proper data handling
+        PA-FIM calculation for STGCN 
         
         Params:
             model: The STGCN model to calculate FIM for
             retain_data_loader: DataLoader for retain set 
             A_wave: Normalized adjacency matrix for STGCN
-            weights: Weights for L_pop statistics
             max_samples: Maximum samples to use (for memory management)
-            batch_accumulation: Accumulate gradients over multiple batches
         """
         model.eval()
         
@@ -207,101 +203,146 @@ class PopulationAwareEWC:
                 fim_diagonal[name] = torch.zeros_like(param, device=self.device)
         
         sample_count = 0
-        batch_count = 0
         
-        # Use subset of statistics for FIM computation (efficiency)
-        statistics_subset = ['marginal', 'acf']  # Most important ones
+        # Use MSE loss for regression (proper likelihood-based)
+        loss_fn = nn.MSELoss(reduction='sum')  # Sum reduction for proper FIM
         
         try:
             for data_batch in retain_data_loader:
                 if sample_count >= max_samples:
                     break
                     
-                # Extract training input and target from batch
-                # Expected format from your generate_dataset: (input, target)
+                # Extract data
                 if isinstance(data_batch, (list, tuple)):
                     X_batch, y_batch = data_batch
-                    X_batch = X_batch.to(self.device)  # (batch, num_nodes, num_timesteps_input, num_features)
-                    y_batch = y_batch.to(self.device)  # (batch, num_nodes, num_timesteps_output)
                 else:
-                    # Single tensor - need to extract input/target somehow
-                    data_batch = data_batch.to(self.device)
                     X_batch = data_batch
-                    y_batch = data_batch  # Use same data as target (reconstruction task)
+                    y_batch = data_batch
+                    
+                X_batch = X_batch.to(self.device)
+                y_batch = y_batch.to(self.device)
+                A_wave = A_wave.to(self.device)
                 
-                # Skip if batch is too small
-                if X_batch.shape[0] < 2:
-                    continue
+                batch_size = X_batch.shape[0]
                 
-                model.zero_grad()
-                
-                # Forward pass through STGCN model
-                model_output = model(A_wave, X_batch)  # Output: (batch, num_nodes, num_timesteps_output)
-                
-                # Calculate L_pop loss
-                loss = self.calculate_L_pop(
-                    model_output, y_batch, weights, statistics_subset
-                )
-                
-                if loss.requires_grad:
+                # Compute FIM per sample in batch
+                for i in range(batch_size):
+                    if sample_count >= max_samples:
+                        break
+                        
+                    model.zero_grad()
+                    
+                    # Single sample forward pass
+                    X_single = X_batch[i:i+1]  # Keep batch dimension
+                    y_single = y_batch[i:i+1]
+                    
+                    # Forward pass
+                    output = model(A_wave, X_single)
+                    
+                    # Likelihood-based loss (MSE for regression)
+                    loss = loss_fn(output, y_single)
+                    
+                    # Backward pass
                     loss.backward()
                     
                     # Accumulate squared gradients
                     for name, param in model.named_parameters():
                         if param.grad is not None:
                             fim_diagonal[name] += param.grad.data.pow(2)
+                    
+                    sample_count += 1
+            
+            # Average over samples
+            if sample_count > 0:
+                for name in fim_diagonal:
+                    fim_diagonal[name] /= sample_count
+            
+            # Add regularization
+            for name in fim_diagonal:
+                fim_diagonal[name] += 1e-8
                 
-                sample_count += X_batch.shape[0]
-                batch_count += 1
-                
-                # Clear intermediate computations
-                if batch_count % batch_accumulation == 0:
-                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-        
         except Exception as e:
-            print(f"Warning: Error during FIM calculation: {e}")
-            # Return small positive values to avoid numerical issues
+            print(f"Error in FIM calculation: {e}")
+            # Return small positive values
             for name in fim_diagonal:
                 fim_diagonal[name].fill_(1e-6)
-            return fim_diagonal
-        
-        # Average over number of samples
-        if sample_count > 0:
-            for name in fim_diagonal:
-                fim_diagonal[name] /= sample_count
-        
-        # Add small regularization to avoid zero values
-        for name in fim_diagonal:
-            fim_diagonal[name] += 1e-8
         
         return fim_diagonal
     
-    def _forward_rnn_vae(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor:
-        """Handle RNN-VAE specific forward pass"""
-        try:
-            output = model(data)
-            if isinstance(output, tuple):
-                return output[0]  # Return reconstruction
-            return output
-        except:
-            return model(data)
-    
+    def calculate_pa_fim_alternative(self, model: nn.Module, 
+                                    retain_data_loader: DataLoader,
+                                    A_wave: torch.Tensor,
+                                    use_l_pop: bool = False,
+                                    max_samples: int = 1000) -> Dict[str, torch.Tensor]:
+        """
+        Alternative: keep L_pop, use it as regularizer not primary loss
+        Test both to see which works better
+        1. Primary loss: likelihood-based (MSE)
+        2. Regularization: L_pop
 
-    def _forward_diffusion(self, model: nn.Module, data: torch.Tensor) -> torch.Tensor:
-        """Handle Diffusion model specific forward pass"""
-        try:
-            # For diffusion models sampling is required 
-            if hasattr(model, 'sample'):
-                return model.sample(data.shape)
-            elif hasattr(model, 'forward'):
-                # Add some noise and denoise
-                t = torch.randint(0, 1000, (data.shape[0],), device=data.device)
-                return model(data, t)
+        Params:
+            model: The STGCN model to calculate FIM for
+            retain_data_loader: DataLoader for retain set 
+            A_wave: Normalized adjacency matrix for STGCN
+            use_l_pop: Whether to include L_pop as regularization
+            max_samples: Maximum samples to use (for memory management)
+        """
+        model.eval()
+        
+        fim_diagonal = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                fim_diagonal[name] = torch.zeros_like(param, device=self.device)
+        
+        sample_count = 0
+        mse_loss = nn.MSELoss(reduction='mean')
+        
+        for data_batch in retain_data_loader:
+            if sample_count >= max_samples:
+                break
+                
+            if isinstance(data_batch, (list, tuple)):
+                X_batch, y_batch = data_batch
             else:
-                return model(data)
-        except:
-            return model(data)
-    
+                X_batch = data_batch
+                y_batch = data_batch
+                
+            X_batch = X_batch.to(self.device)
+            y_batch = y_batch.to(self.device)
+            A_wave = A_wave.to(self.device)
+            
+            model.zero_grad()
+            
+            # Forward pass
+            output = model(A_wave, X_batch)
+            
+            # Primary loss: likelihood-based (MSE)
+            primary_loss = mse_loss(output, y_batch)
+            
+            # Add L_pop as regularization term
+            if use_l_pop:
+                l_pop_term = self.calculate_L_pop(output, y_batch, statistics_subset=['marginal'])
+                total_loss = primary_loss + 0.1 * l_pop_term  # Small weight for L_pop
+            else:
+                total_loss = primary_loss
+            
+            # Backward pass
+            total_loss.backward()
+            
+            # Accumulate squared gradients
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    fim_diagonal[name] += param.grad.data.pow(2) * X_batch.shape[0]  # Scale by batch size
+            
+            sample_count += X_batch.shape[0]
+        
+        # Average and regularize
+        if sample_count > 0:
+            for name in fim_diagonal:
+                fim_diagonal[name] /= sample_count
+                fim_diagonal[name] += 1e-8
+        
+        return fim_diagonal    
 
     def apply_ewc_penalty(self, model: nn.Module, 
                          fim_diagonal: Dict[str, torch.Tensor],

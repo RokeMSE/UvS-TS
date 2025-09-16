@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 from typing import Optional, Union, Tuple
 
 class TemporalGenerativeReplay:
@@ -43,39 +44,67 @@ class TemporalGenerativeReplay:
             for idx in d_f:
                 masked_data[:, idx[0]:idx[1], :] = 0.0
                 
-        return masked_data
+        return masked_data.to(torch.float32)
     
 # ----------------- Model reconstruction --------------------
-    def reconstruct_stgcn(self, model: nn.Module, masked_data: torch.Tensor,
-                        faulty_node_idx: int, A_hat: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def surrogate_stgcn(self, model: nn.Module, node_dataset,
+                        forget_indices: list, faulty_node_idx: int, num_timesteps_input, num_timesteps_output, 
+                        device, A_hat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Reconstruct using STGCN model"""
         model.eval()
         
         # Ensure masked_data is 4D: (B, N, T, F)
-        if masked_data.dim() == 3:
-            masked_data = masked_data.unsqueeze(-1)
-        elif masked_data.dim() == 2:
-            masked_data = masked_data.unsqueeze(0).unsqueeze(-1)
+        # if masked_data.dim() == 3:
+        #     masked_data = masked_data.unsqueeze(-1)
+        # elif masked_data.dim() == 2:
+        #     masked_data = masked_data.unsqueeze(0).unsqueeze(-1)
         
+        node_input, node_target = generate_dataset(node_dataset, num_timesteps_input, num_timesteps_output)
+        node_input = node_input.float()
+        node_target = node_target.float()
+
         with torch.no_grad():
             if hasattr(model, 'forward_unlearning_compatible'):
-                reconstructed = model.forward_unlearning_compatible(masked_data)
+                project_output = model.forward_unlearning_compatible(node_input)
             elif A_hat is not None:
-                reconstructed = model(A_hat, masked_data)
+                batch_size = 256
+                all_outputs = []
+                num_samples = node_input.size(0)
+
+                for i in range(0, num_samples, batch_size):
+                    batch = node_input[i:i+batch_size].to(device) # (B, N = 1, T, F)
+                    batch_out = model(A_hat, batch)
+                    all_outputs.append(batch_out.detach())
+
+                project_output = torch.cat(all_outputs, dim=0).detach().cpu()
+                # (B, N, T, F)
             else:
                 raise ValueError("Either model must have forward_unlearning or A_hat must be provided")
-                
-            # Handle shape matching for reconstruction
-            if reconstructed.shape[2] != masked_data.shape[2]:
-                target_len = masked_data.shape[2]
-                if reconstructed.shape[2] < target_len:
-                    pad_size = target_len - reconstructed.shape[2]
-                    last_vals = reconstructed[:, :, -1:].repeat(1, 1, pad_size)
-                    reconstructed = torch.cat([reconstructed, last_vals], dim=2)
-                else:
-                    reconstructed = reconstructed[:, :, :target_len]
-                    
-        return reconstructed
+            
+        surrogate = []
+        
+        for item in forget_indices:
+            subset = []
+            for i in range(item[0], item[1]):
+                row = i - num_timesteps_input # row
+                col = 0
+                count = 0
+                value = torch.zeros(3)
+                while row >= 0 and count < num_timesteps_output:
+                    value += project_output[row, faulty_node_idx, col, :]
+                    count += 1
+                    row = row - 1
+                    col = col + 1
+
+                if count > 0:
+                    value = value / count
+
+                subset.append(value.unsqueeze(1))
+            if subset:
+                seg_tensor = torch.cat(subset, dim=1).unsqueeze(0)  # (1, F, T_segment)
+                surrogate.append(seg_tensor.numpy())
+
+        return surrogate
 
 # --------------------- Main Steps -------------------------
     def _apply_graph_constraints(self, data: torch.Tensor, edge_index: torch.Tensor,
@@ -112,90 +141,101 @@ class TemporalGenerativeReplay:
         return x_prev
     
 
-    def add_error_minimizing_noise(self, data: torch.Tensor, 
-                                  d_f: Union[int, list],
+    def add_error_minimizing_noise(self, data: list, 
+                                  forget_indices: Union[int, list],
                                   noise_scale: float = 0.01) -> torch.Tensor:
         """
         Add imperceptible error-minimizing noise to promote unlearning
         Inspired by unlearnable examples literature
         What this will do is make the model less sensitive to the forgotten patterns because it introduces noise in a controlled manner.
-        """
-        noisy_data = data.clone()
-        
-        if isinstance(d_f, int):
-            d_f = [d_f] # Convert to list if single index is provided
+        """      
 
-        for idx in d_f: # Currently all samples in d_f is added with noise, this might cause a bottleneck, idk how to avoid this yet
-            # Generate adversarial noise that minimizes learning signal
-            noise = torch.randn_like(data[:, :, idx]) * noise_scale
-            
-            # Apply smoothing to make noise less detectable
-            if data.shape[1] > 1:  # temporal smoothing
-                noise = torch.nn.functional.avg_pool1d(
-                    noise.unsqueeze(1), kernel_size=3, stride=1, padding=1
-                ).squeeze(1)
-            
-            noisy_data[:, :, idx] += noise
-            
+        noisy_data = []
+
+        for i, seq in enumerate(data):
+            seq_copy = seq.clone() if isinstance(seq, torch.Tensor) else torch.tensor(seq)
+
+            if i in forget_indices:
+                # Thêm noise Gaussian cùng shape
+                noise = torch.randn_like(seq_copy) * noise_scale
+                seq_copy = seq_copy + noise
+
+                # Optionally: smooth theo chiều thời gian (axis=-1)
+                if seq_copy.ndim >= 2:
+                    kernel = torch.ones(3, device=seq_copy.device) / 3.0
+                    padding = (1,)  # same padding cho conv1d
+                    # reshape về (batch=features, channel=1, length=time)
+                    smoothed = torch.nn.functional.conv1d(
+                        seq_copy.unsqueeze(1), 
+                        kernel.view(1, 1, -1), 
+                        padding=padding
+                    )
+                    seq_copy = smoothed.squeeze(1)
+
+            noisy_data.append(seq_copy)
+
         return noisy_data
     
 
     def perform_temporal_generative_replay(self, model: nn.Module, 
-                                         forget_sample: torch.Tensor,
-                                         d_f: Union[int, list],
-                                         edge_index: Optional[torch.Tensor] = None) -> torch.Tensor:
+                                         node_dataset,
+                                         forget_indices: Union[int, list],
+                                         faulty_node_idx: int,
+                                         num_timesteps_input,
+                                         num_timesteps_output,
+                                         device,
+                                         A_wave: Optional[torch.Tensor] = None) -> list:
         """
         Main T-GR function implementing Reconstruction and Neutralization
         
         Params:
             model: The model being unlearned
-            forget_sample: Sample from forget set D_f
-            d_f: Indices to be neutralized
-            edge_index: Graph edges (for STGCN)
+            node_dataset: Dataset of faulty node
+            forget_indices: Indices to be neutralized
+            faulty_node_idx: Index of faulty node
+            num_timesteps_input: number of sample input
+            num_timesteps_output: number of sample output
+            device,
+            A_wave: Graph edges (for STGCN)
             
         Returns:
             Neutralized surrogate data
         """
-        # Determine device from model and move input tensor to it
-        device = next(model.parameters()).device
-        forget_sample = forget_sample.to(device)
 
         # Step 1: Create mask for unwanted patterns
-        masked_data = self.create_mask(forget_sample, d_f)
+        #masked_data = self.create_mask(forget_sample, d_f)
         
         # Step 2: Model-specific reconstruction
         if self.model_type == "stgcn":
-            if isinstance(d_f, list) and len(d_f) == 1:
-                faulty_node_idx = d_f[0]
-            else:
-                faulty_node_idx = d_f
-            reconstructed = self.reconstruct_stgcn(model, masked_data, faulty_node_idx, edge_index)
+            surrogate_sample = self.surrogate_stgcn(model, node_dataset, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, device, A_wave)
+            # (B, N, F, T)
             
         elif self.model_type == "rnn_vae":
-            reconstructed = self.reconstruct_rnn_vae(model, masked_data, d_f)
+            reconstructed = self.reconstruct_rnn_vae(model, node_dataset, forget_indices)
             
         elif self.model_type == "diffusion":
-            reconstructed = self.reconstruct_diffusion(model, masked_data, d_f)
+            reconstructed = self.reconstruct_diffusion(model, node_dataset, forget_indices)
             
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
         
-        # Step 3: Create surrogate by replacing only the faulty parts
-        surrogate_sample = forget_sample.clone()
+        # # Step 3: Create surrogate by replacing only the faulty parts
+        # surrogate_sample = node_dataset
         
-        if isinstance(d_f, int):
-            d_f = [d_f]
+        # if isinstance(forget_indices, int):
+        #     forget_indices = [forget_indices]
             
-        for idx in d_f:
-            if isinstance(idx, int):  # Node-level replacement
-                surrogate_sample[:, :, idx] = reconstructed[:, :, idx]
-            else:  # Temporal segment replacement
-                start, end = idx
-                surrogate_sample[:, start:end, :] = reconstructed[:, start:end, :]
+        # for idx in forget_indices:
+        #     if isinstance(idx, int):  # Node-level replacement
+        #         surrogate_sample[:, :, idx] = reconstructed[:, :, idx]
+        #     else:  # Temporal segment replacement
+        #         start, end = idx
+        #         surrogate_sample[:, start:end, :] = reconstructed[:, star:end, :]
         
         # Step 4: Add error-minimizing noise
+
         surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, d_f, noise_scale=0.01
+            surrogate_sample, forget_indices, noise_scale=0.01
         )
         
         return surrogate_sample

@@ -5,7 +5,7 @@ def get_normalized_adj(A):
     """
     Returns the degree normalized adjacency matrix.
     """
-    A = A + np.diag(np.ones(A.shape[0], dtype=np.float32))
+    A = A + np.diag(np.ones(A.shape[0], dtype=np.double))
     D = np.array(np.sum(A, axis=1)).reshape((-1,))
     D[D <= 10e-5] = 10e-5    # Prevent divde by 0
     diag = np.reciprocal(np.sqrt(D))
@@ -26,17 +26,41 @@ def generate_dataset(X, num_timesteps_input, num_timesteps_output):
         - Node targets for the samples. Shape is
           (num_samples, num_vertices, num_features, num_timesteps_output).
     """
-    # Generate the beginning index and the ending index of a sample, which
-    # contains (num_points_for_training + num_points_for_predicting) points
+
+
+    # # Generate the beginning index and the ending index of a sample, which
+    # # contains (num_points_for_training + num_points_for_predicting) points
+    # indices = [(i, i + (num_timesteps_input + num_timesteps_output)) for i
+    #            in range(X.shape[2] - (num_timesteps_input + num_timesteps_output) + 1)]
+    # # (start : start + num_input + num_output) 
+
+    # # Save samples
+    # features, target = [], []
+    # for i, j in indices:
+    #     features.append(
+    #         X[:, :, i: i + num_timesteps_input].transpose(
+    #             (0, 2, 1)))
+    #     target.append(X[:, :, i + num_timesteps_input: j].transpose((0, 2, 1)))
+
+    # return torch.from_numpy(np.array(features)), torch.from_numpy(np.array(target))
+
+
+    if isinstance(X, np.ndarray):
+        X = torch.from_numpy(X).float() 
+
     indices = [(i, i + (num_timesteps_input + num_timesteps_output)) for i
                in range(X.shape[2] - (num_timesteps_input + num_timesteps_output) + 1)]
+    # (start : start + num_input + num_output) 
 
     # Save samples
-    features, target = [], []
+    if indices == []:
+        return torch.from_numpy(np.array([])), torch.from_numpy(np.array([]))
+    
+    features, targets = [], []
     for i, j in indices:
         features.append(
-            X[:, :, i: i + num_timesteps_input].transpose(
+            X[:, :, i: i + num_timesteps_input].permute(
                 (0, 2, 1)))
-        target.append(X[:, 0, i + num_timesteps_input: j])
+        targets.append(X[:, :, i + num_timesteps_input: j].permute((0, 2, 1)))
 
-    return torch.from_numpy(np.array(features)), torch.from_numpy(np.array(target))
+    return torch.stack(features), torch.stack(targets)

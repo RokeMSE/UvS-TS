@@ -18,7 +18,7 @@ def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
     """
     S = dataset[:, 1, :]
     _, time_step = S.shape
-    results = []
+    forget_indices = []
     idx = 1
     i = 1
     check = False
@@ -32,7 +32,7 @@ def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
                 pre_value = S[faulty_node_idx, i-1]
                 idx += 1
             else:
-                results.append([i - idx, i - 1])
+                forget_indices.append([i - idx, i - 1])
                 check = False
                 idx = 1
         elif dtw.distance_fast(u, S[faulty_node_idx, i-idx : i]) <= threshold:
@@ -43,20 +43,24 @@ def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
         i += 1
 
     if check == True:
-        results.append([i - idx, i - 1])
+        forget_indices.append([i - idx, i - 1])
     
+    retain_indices = []
     motif_segments = []
-    for item in results:
-        motif_segments.append(torch.tensor(S[faulty_node_idx, item[0]:item[1]], dtype=torch.float32))
+    # for item in forget_indices:
+    #     motif_segments.append(torch.tensor(S[faulty_node_idx, item[0]:item[1]], dtype=torch.float32))
 
     non_motif_segments = []
-    if results[0][0] != 0:
-        non_motif_segments.append(torch.tensor(S[faulty_node_idx, 0:results[0][0]], dtype=torch.float32))
+    if forget_indices[0][0] != 0:
+        retain_indices.append([0, forget_indices[0][0]])
+        #non_motif_segments.append(torch.tensor(S[faulty_node_idx, 0:forget_indices[0][0]], dtype=torch.float32))
 
-    for i in range(1, len(results)):
-        non_motif_segments.append(torch.tensor(S[faulty_node_idx, results[i - 1][1] : results[i][0]], dtype=torch.float32))
+    for i in range(1, len(forget_indices)):
+        retain_indices.append([forget_indices[i - 1][1], forget_indices[i][0]])
+        #non_motif_segments.append(torch.tensor(S[faulty_node_idx, forget_indices[i - 1][1] : forget_indices[i][0]], dtype=torch.float32))
 
-    if results[-1][1] != time_step:
-        non_motif_segments.append(torch.tensor(S[faulty_node_idx, results[-1][1] : time_step], dtype=torch.float32))
+    if forget_indices[-1][1] != time_step:
+        retain_indices.append([forget_indices[-1][1], time_step])
+        #non_motif_segments.append(torch.tensor(S[faulty_node_idx, forget_indices[-1][1] : time_step], dtype=torch.float32))
     
-    return motif_segments, non_motif_segments
+    return forget_indices, retain_indices

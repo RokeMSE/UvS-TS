@@ -17,7 +17,7 @@ def load_data_PEMS_BAY(file_path):
         print('Unable to load data ', file_path + "/adj_mx_bay.pkl", ':', e)
         raise
 
-    X = X.astype(np.float32)
+    X = X.astype(np.double)
 
     # Normalization using Z-score method
     means = np.mean(X, axis=(0, 2))

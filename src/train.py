@@ -8,9 +8,9 @@ from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 
 num_timesteps_input = 12
-num_timesteps_output = 3
+num_timesteps_output = 4
 
-epochs = 100
+epochs = 10
 batch_size = 256
 
 parser = argparse.ArgumentParser(description='STGCN')
@@ -47,21 +47,22 @@ def train_epoch(training_input, training_target, batch_size):
 
         indices = permutation[i:i + batch_size]
         X_batch, y_batch = training_input[indices], training_target[indices]
-        X_batch = X_batch.to(device=args.device)
-        y_batch = y_batch.to(device=args.device)
+        X_batch = X_batch.float().to(device=args.device)
+        y_batch = y_batch.float().to(device=args.device)
 
         out = model(A_wave, X_batch)
         loss = loss_criterion(out, y_batch)
         loss.backward()
         optimizer.step()
         epoch_training_losses.append(loss.detach().cpu().numpy())
+        print(f"\t Batch {i // batch_size} training loss: {loss}")
     return sum(epoch_training_losses)/len(epoch_training_losses)
 
 if __name__ == '__main__':
     torch.manual_seed(3)
 
     A, X, means, stds = load_data_PEMS_BAY(args.input) # (N, F, T)
-    split_line = int(X.shape[2] * 0.1)
+    split_line = int(X.shape[2] * 0.01)
 
     train_original_data = X[:, :, :split_line]
     test_original_data = X[:, :, split_line:]
@@ -76,13 +77,14 @@ if __name__ == '__main__':
     # (B, N, T, F), (B, N, T)
 
     A_wave = get_normalized_adj(A)
-    A_wave = torch.from_numpy(A_wave)
+    A_wave = torch.from_numpy(A_wave).float()
     A_wave = A_wave.to(device=args.device)
 
     model = STGCN(A_wave.shape[0],
                     training_input.shape[3],
                     num_timesteps_input,
-                    num_timesteps_output).to(device=args.device)
+                    num_timesteps_output, 
+                    num_features_output=3).to(device=args.device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_criterion = nn.MSELoss()
@@ -93,7 +95,7 @@ if __name__ == '__main__':
         loss = train_epoch(training_input, training_target,
                             batch_size=batch_size)
         training_losses.append(loss)
-        print("Training loss: {}".format(training_losses[-1]))
+        print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
 
     path = args.model 
     if not os.path.exists(path):

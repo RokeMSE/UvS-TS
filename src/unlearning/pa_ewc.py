@@ -31,23 +31,15 @@ class PopulationAwareEWC:
                        weights: Optional[Dict[str, float]] = None,
                        statistics_subset: Optional[List[str]] = None) -> torch.Tensor:
         """
-        L_pop calculation with better error handling and efficiency options
-        
+        L_pop calculation
+
         Params:
             model_output: Generated data (batch, seq_len, num_nodes)
             ground_truth_data: Real retain data (batch, seq_len, num_nodes)
             weights: Custom weights for statistics
             statistics_subset: Subset of statistics to compute for efficiency
+        L_pop calculation
         """
-        # Convert shapes for statistical analysis - Expected: (B, T, N)
-        if model_output.dim() == 3:
-            # Check if it's (B, N, T) and convert to (B, T, N)
-            if model_output.shape[1] > model_output.shape[2]:
-                model_output = model_output.transpose(1, 2)
-        
-        if ground_truth_data.dim() == 3:
-            if ground_truth_data.shape[1] > ground_truth_data.shape[2]:
-                ground_truth_data = ground_truth_data.transpose(1, 2)
 
         if not isinstance(weights, (dict, type(None))):
             # If weights is not a dict or None, default to the class weights.
@@ -57,19 +49,16 @@ class PopulationAwareEWC:
         elif weights is None:
             weights = self.default_weights.copy()
                 
-        # Default to all statistics if not specified
         if statistics_subset is None:
-            statistics_subset = ['marginal', 'acf']  # Start with most important ones
+            statistics_subset = ['marginal', 'acf']
             
         total_loss = 0.0
         computed_losses = {}
         
-        # Ensure tensors are on the same device
-        model_output = model_output.to(self.device)
-        ground_truth_data = ground_truth_data.to(self.device) 
+        model_output = model_output.float().to(self.device)
+        ground_truth_data = ground_truth_data.float().to(self.device)
         
         try:
-            # 1. Marginal Value Distributions (most fundamental)
             if 'marginal' in statistics_subset and weights.get('marginal', 0.0) > 0:
                 gt_marginal = self._safe_get_marginal_distribution(ground_truth_data)
                 gen_marginal = self._safe_get_marginal_distribution(model_output)
@@ -80,7 +69,6 @@ class PopulationAwareEWC:
                         computed_losses['marginal'] = loss_marginal
                         total_loss += weights['marginal'] * loss_marginal
 
-            # 2. Autocorrelation Functions (temporal dependencies)
             if 'acf' in statistics_subset and weights.get('acf', 0.0) > 0:
                 gt_acf = self._safe_get_autocorrelation(ground_truth_data)
                 gen_acf = self._safe_get_autocorrelation(model_output)
@@ -91,39 +79,10 @@ class PopulationAwareEWC:
                         computed_losses['acf'] = loss_acf
                         total_loss += weights['acf'] * loss_acf
 
-            # 3. Power Spectral Densities (frequency content)
-            if 'psd' in statistics_subset and weights.get('psd', 0.0) > 0:
-                gt_psd = self._safe_get_power_spectral_density(ground_truth_data)
-                gen_psd = self._safe_get_power_spectral_density(model_output)
-                
-                if gt_psd is not None and gen_psd is not None:
-                    loss_psd = self._safe_mmd_loss(gt_psd, gen_psd)
-                    if loss_psd is not None:
-                        computed_losses['psd'] = loss_psd
-                        total_loss += weights['psd'] * loss_psd
-
-            # 4. Cross-Correlations (inter-node dependencies)
-            if 'cc' in statistics_subset and weights.get('cc', 0.0) > 0:
-                # Only compute if there are multiple nodes and reasonable batch size
-                if ground_truth_data.shape[-1] > 1 and ground_truth_data.shape[0] <= 32:
-                    gt_cc = self._safe_get_cross_correlations(ground_truth_data)
-                    gen_cc = self._safe_get_cross_correlations(model_output)
-                    
-                    if gt_cc is not None and gen_cc is not None and len(gt_cc) > 0:
-                        loss_cc = self._safe_mmd_loss(gt_cc, gen_cc)
-                        if loss_cc is not None:
-                            computed_losses['cc'] = loss_cc
-                            total_loss += weights['cc'] * loss_cc
-
         except Exception as e:
-            print(f"Warning: Error in L_pop calculation: {e}")
-            # Return a small positive loss to avoid training issues
-            return torch.tensor(1e-6, device=self.device, requires_grad=True)
+            print(f"Error in L_pop calculation: {e}")
         
-        # Store computed losses for debugging
-        self.last_computed_losses = computed_losses
-        
-        return total_loss if total_loss > 0 else torch.tensor(1e-6, device=self.device, requires_grad=True)
+        return total_loss
     
 
 # ------------------- Wrappers for Statistics -------------------
@@ -181,93 +140,83 @@ class PopulationAwareEWC:
     
 
 # ------------------- FIM Calculation -------------------
-    def calculate_pa_fim(self, model: nn.Module, 
-                        retain_data_loader: DataLoader,
-                        A_wave: torch.Tensor,  # Adjacency matrix for STGCN
-                        max_samples: int = 1000) -> Dict[str, torch.Tensor]:
+    def calculate_pa_fim(self, model: nn.Module, retain_data_loader: DataLoader,
+                        A_wave: torch.Tensor, max_samples: int = 1000) -> Dict[str, torch.Tensor]:
         """
-        PA-FIM calculation for STGCN 
-        
-        Params:
-            model: The STGCN model to calculate FIM for
-            retain_data_loader: DataLoader for retain set 
-            A_wave: Normalized adjacency matrix for STGCN
-            max_samples: Maximum samples to use (for memory management)
+        Calculate diagonal of Population-Aware FIM
         """
         model.eval()
         
-        # Initialize FIM diagonal storage
         fim_diagonal = {}
         for name, param in model.named_parameters():
             if param.requires_grad:
-                fim_diagonal[name] = torch.zeros_like(param, device=self.device)
+                fim_diagonal[name] = torch.zeros_like(param, device=self.device, dtype=torch.float32)
         
         sample_count = 0
-        
-        # Use MSE loss for regression (proper likelihood-based)
-        loss_fn = nn.MSELoss(reduction='sum')  # Sum reduction for proper FIM
+        loss_fn = nn.MSELoss(reduction='mean')
         
         try:
             for data_batch in retain_data_loader:
                 if sample_count >= max_samples:
                     break
                     
-                # Extract data
                 if isinstance(data_batch, (list, tuple)):
                     X_batch, y_batch = data_batch
                 else:
                     X_batch = data_batch
                     y_batch = data_batch
-                    
-                X_batch = X_batch.to(self.device)
-                y_batch = y_batch.to(self.device)
-                A_wave = A_wave.to(self.device)
                 
-                batch_size = X_batch.shape[0]
+                # Ensure float32
+                X_batch = X_batch.float().to(self.device)
+                y_batch = y_batch.float().to(self.device)
+                A_wave = A_wave.float().to(self.device)
+            
                 
-                # Compute FIM per sample in batch
-                for i in range(batch_size):
+                model.zero_grad()
+                
+                for i in range(X_batch.shape[0]):
                     if sample_count >= max_samples:
                         break
-                        
-                    model.zero_grad()
                     
                     # Single sample forward pass
-                    X_single = X_batch[i:i+1]  # Keep batch dimension
-                    y_single = y_batch[i:i+1]
+                    X_single = X_batch[i:i+1].float()
+                    y_single = y_batch[i:i+1].float()
                     
-                    # Forward pass
                     output = model(A_wave, X_single)
                     
-                    # Likelihood-based loss (MSE for regression)
                     loss = loss_fn(output, y_single)
-                    
-                    # Backward pass
                     loss.backward()
                     
-                    # Accumulate squared gradients
+                    # Clip gradients for FIM stability
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
                     for name, param in model.named_parameters():
                         if param.grad is not None:
                             fim_diagonal[name] += param.grad.data.pow(2)
+                        else:
+                            print(f"FIM calc - {name} grad is None")
                     
+                    model.zero_grad()  # Clear gradients after each sample
                     sample_count += 1
             
-            # Average over samples
             if sample_count > 0:
                 for name in fim_diagonal:
                     fim_diagonal[name] /= sample_count
-            
-            # Add regularization
-            for name in fim_diagonal:
-                fim_diagonal[name] += 1e-8
-                
+                    # Normalize FIM to prevent tiny values
+                    fim_diagonal[name] = fim_diagonal[name] / (fim_diagonal[name].mean() + 1e-8)
+                    fim_diagonal[name] += 1e-8  # Small constant for stability
+            else:
+                print("FIM calc - No samples processed")
+                for name in fim_diagonal:
+                    fim_diagonal[name].fill_(1e-6)
+        
         except Exception as e:
             print(f"Error in FIM calculation: {e}")
-            # Return small positive values
             for name in fim_diagonal:
                 fim_diagonal[name].fill_(1e-6)
-        
+
         return fim_diagonal
+    
     
     def calculate_pa_fim_alternative(self, model: nn.Module, 
                                     retain_data_loader: DataLoader,
@@ -347,23 +296,20 @@ class PopulationAwareEWC:
     def apply_ewc_penalty(self, model: nn.Module, 
                          fim_diagonal: Dict[str, torch.Tensor],
                          original_params: Dict[str, torch.Tensor],
-                         lambda_ewc: float = 1000.0) -> torch.Tensor:
+                         lambda_ewc: float = 10.0) -> torch.Tensor:
         """
         Apply the EWC penalty term
-        
-        Params:
-            model: Current model
-            fim_diagonal: Computed FIM diagonal
-            original_params: Original model parameters (θ*)
-            lambda_ewc: EWC regularization strength
         """
-        penalty = 0.0
+        penalty = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         
         for name, param in model.named_parameters():
             if name in fim_diagonal and name in original_params:
-                penalty += (fim_diagonal[name] * (param - original_params[name]).pow(2)).sum()
+                diff = (param - original_params[name]).pow(2)
+                weighted_diff = fim_diagonal[name] * diff
+                penalty += weighted_diff.sum()
         
-        return lambda_ewc * penalty / 2.0
+        penalty = lambda_ewc * penalty / 2.0 
+        return penalty
     
 
     def get_statistics_summary(self) -> Dict[str, float]:

@@ -234,7 +234,7 @@ class TemporalGenerativeReplay:
         # Step 4: Add error-minimizing noise
 
         surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, forget_indices, noise_scale=0.01
+            surrogate_sample, forget_indices, noise_scale=0.08 # Change accordingly to fit the desired 
         )
         
         return surrogate_sample

@@ -5,7 +5,7 @@ def get_normalized_adj(A):
     """
     Returns the degree normalized adjacency matrix.
     """
-    A = A + np.diag(np.ones(A.shape[0], dtype=np.double))
+    A = A + np.diag(np.ones(A.shape[0], dtype=np.float32)) # Convert to float32
     D = np.array(np.sum(A, axis=1)).reshape((-1,))
     D[D <= 10e-5] = 10e-5    # Prevent divde by 0
     diag = np.reciprocal(np.sqrt(D))

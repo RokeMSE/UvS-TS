@@ -66,3 +66,9 @@ data_loader.py → stgcn.py → unlearn.py → evaluate.py
 ```
 
 ### NOTICE: For functions called from different file, use this for safety `import {folder_name}/{file_name}`
+
+## How to run:
+- Train the base model: \
+`python src/train.py --enable-cuda --input C:/Users/rokeM/Downloads/"UvS-TS Data"/PEMSBAY --model C:/Users/rokeM/Downloads/"UvS-TS Data"/Model`
+- Unlearn: \
+`python src/unlearn.py --enable-cuda --input C:/Users/rokeM/Downloads/"UvS-TS Data"/PEMSBAY --model C:/Users/rokeM/Downloads/"UvS-TS Data"/Model --forget_set C:/Users/rokeM/Downloads/"UvS-TS Data"/forget_set.txt`

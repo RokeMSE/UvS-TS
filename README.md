@@ -71,4 +71,7 @@ data_loader.py → stgcn.py → unlearn.py → evaluate.py
 - Train the base model: \
 `python src/train.py --enable-cuda --input C:/Users/rokeM/Downloads/"UvS-TS Data"/PEMSBAY --model C:/Users/rokeM/Downloads/"UvS-TS Data"/Model`
 - Unlearn: \
+  + Subsection:
 `python src/unlearn.py --enable-cuda --input C:/Users/rokeM/Downloads/"UvS-TS Data"/PEMSBAY --model C:/Users/rokeM/Downloads/"UvS-TS Data"/Model --forget_set C:/Users/rokeM/Downloads/"UvS-TS Data"/forget_set.txt`
+  + Node:
+`python src/unlearn.py --enable-cuda --input C:/Users/rokeM/Downloads/"UvS-TS Data"/PEMSBAY --model C:/Users/rokeM/Downloads/"UvS-TS Data"/Model --unlearn-node --node-idx 10`

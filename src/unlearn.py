@@ -19,6 +19,12 @@ from unlearning.pa_ewc import PopulationAwareEWC
 from unlearning.t_gr import TemporalGenerativeReplay
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
+# Import evaluation functions
+from evaluate import (
+    evaluate_unlearning, fidelity_score, forgetting_efficacy, 
+    generalization_score, statistical_distance, membership_inference_attack,
+    get_model_predictions
+)
 import sys
 sys.path.append('src')
 
@@ -49,13 +55,18 @@ class SATimeSeries:
     """Complete SA-TS Framework Integration"""
     def __init__(self, model, device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.model = copy.deepcopy(model).to(self.device)
+        
+        # --- Store the original model state for evaluation ---
+        self.original_model = copy.deepcopy(model).to(self.device)
+        self.original_model.eval()
+        
+        self.model = copy.deepcopy(model).to(self.device) # This is the model that will be modified during unlearning
         
         # Ensure model parameters are float32
         for param in self.model.parameters():
             param.data = param.data.float()
         
-        # Store original parameters
+        # Store original parameters for EWC
         self.original_params = {}
         for name, param in self.model.named_parameters():
             self.original_params[name] = param.data.clone().float()
@@ -387,7 +398,21 @@ def main():
     num_timesteps_input = config["num_timesteps_input"]
     num_timesteps_output = config["num_timesteps_output"]
 
-    # Initialize SA-TS framework
+    # --- Create a test loader for evaluation ---
+    split_line = int(X.shape[2] * 0.01)
+    train_original_data = X[:, :, :split_line]
+    test_original_data = X[:, :, split_line:]
+
+    training_input, training_target = generate_dataset(train_original_data,
+                                                        num_timesteps_input=num_timesteps_input,
+                                                        num_timesteps_output=num_timesteps_output)
+    test_input, test_target = generate_dataset(test_original_data,
+                                                num_timesteps_input=num_timesteps_input,
+                                                num_timesteps_output=num_timesteps_output)
+    test_dataset = TensorDataset(test_input, test_target)
+    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    
+    # --- MODIFIED: Initialize SA-TS framework, which now stores the original model ---
     sa_ts = SATimeSeries(model, args.device)
     
     # Run unlearning
@@ -406,25 +431,23 @@ def main():
             lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=16
         )
 
-    
-
-    # Evaluate
-    def evaluate_model(model, loader, A_wave, device):
-        model.eval()
-        mse_loss = nn.MSELoss()
-        total_loss = 0
-        with torch.no_grad():
-            for batch in loader:
-                X, y = batch
-                X, y = X.float().to(device), y.float().to(device)
-                pred = sa_ts.model(A_wave, X)
-                total_loss += mse_loss(pred, y).item()
-        return total_loss / len(loader) if len(loader) > 0 else 0.0
-
+    # --- Evaluate the unlearned model ---
     print("\nEvaluating unlearned model...")
-    print("Forget MSE:", evaluate_model(model, forget_loader, A_wave, args.device))
-    print("Retain MSE:", evaluate_model(model, retain_loader, A_wave, args.device))
+    evaluation_results = evaluate_unlearning(
+        model_unlearned=sa_ts.model,
+        model_original=sa_ts.original_model, # Use the copy from the class
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        test_loader=test_loader,
+        A_wave=A_wave,
+        device=args.device
+    )
 
+    print("\n--- Evaluation Results ---")
+    for metric, value in evaluation_results.items():
+        print(f"{metric}: {value:.4f}")
+    print("--------------------------\n")
+    
     # # Save results
     # print("\nSaving results...")
     # torch.save({

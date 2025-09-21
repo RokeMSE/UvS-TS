@@ -3,3 +3,4 @@ frame.txt
 *.pyc
 *.cfg
 *.exe
+*.pth

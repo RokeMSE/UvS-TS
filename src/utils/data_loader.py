@@ -25,4 +25,4 @@ def load_data_PEMS_BAY(file_path):
     stds = np.std(X, axis=(0, 2))
     X = X / stds.reshape(1, -1, 1)
 
-    return A[2], X, means, stds
+    return A, X, means, stds

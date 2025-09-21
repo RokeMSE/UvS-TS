@@ -81,6 +81,7 @@ class TemporalGenerativeReplay:
                 raise ValueError("Either model must have forward_unlearning or A_hat must be provided")
             
         surrogate = []
+        num_outputs, _, _, _ = project_output.shape
         
         for item in forget_indices:
             subset = []
@@ -89,7 +90,10 @@ class TemporalGenerativeReplay:
                 col = 0
                 count = 0
                 value = torch.zeros(3)
-                while row >= 0 and count < num_timesteps_output:
+                while row >= num_outputs:
+                    row = row - 1
+                    col = col + 1
+                while row >= 0 and col < num_timesteps_output:
                     value += project_output[row, faulty_node_idx, col, :]
                     count += 1
                     row = row - 1
@@ -102,6 +106,7 @@ class TemporalGenerativeReplay:
             if subset:
                 seg_tensor = torch.cat(subset, dim=1).unsqueeze(0)  # (1, F, T_segment)
                 surrogate.append(seg_tensor.numpy())
+
 
         return surrogate
 
@@ -176,7 +181,7 @@ class TemporalGenerativeReplay:
         return noisy_data
     
 
-    def perform_temporal_generative_replay(self, model: nn.Module, 
+    def perform_temporal_generative_replay_subset(self, model: nn.Module, 
                                          node_dataset,
                                          forget_indices: Union[int, list],
                                          faulty_node_idx: int,
@@ -200,44 +205,65 @@ class TemporalGenerativeReplay:
         Returns:
             Neutralized surrogate data
         """
-
-        # Step 1: Create mask for unwanted patterns
-        #masked_data = self.create_mask(forget_sample, d_f)
         
-        # Step 2: Model-specific reconstruction
         if self.model_type == "stgcn":
             surrogate_sample = self.surrogate_stgcn(model, node_dataset, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, device, A_wave)
             # (B, N, F, T)
             
-        elif self.model_type == "rnn_vae":
-            reconstructed = self.reconstruct_rnn_vae(model, node_dataset, forget_indices)
-            
-        elif self.model_type == "diffusion":
-            reconstructed = self.reconstruct_diffusion(model, node_dataset, forget_indices)
-            
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
-        
-        # # Step 3: Create surrogate by replacing only the faulty parts
-        # surrogate_sample = node_dataset
-        
-        # if isinstance(forget_indices, int):
-        #     forget_indices = [forget_indices]
-            
-        # for idx in forget_indices:
-        #     if isinstance(idx, int):  # Node-level replacement
-        #         surrogate_sample[:, :, idx] = reconstructed[:, :, idx]
-        #     else:  # Temporal segment replacement
-        #         start, end = idx
-        #         surrogate_sample[:, start:end, :] = reconstructed[:, star:end, :]
-        
-        # Step 4: Add error-minimizing noise
 
         surrogate_sample = self.add_error_minimizing_noise(
             surrogate_sample, forget_indices, noise_scale=0.08 # Change accordingly to fit the desired 
         )
         
         return surrogate_sample
+    
+    def perform_temporal_generative_replay_node(self, model: nn.Module, 
+                                         dataset,
+                                         faulty_node_idx: int,
+                                         num_timesteps_input,
+                                         num_timesteps_output,
+                                         device,
+                                         A_wave: Optional[torch.Tensor] = None) -> list:
+        """
+        Main T-GR function implementing Reconstruction and Neutralization
+        
+        Params:
+            model: The model being unlearned
+            dataset: Dataset of faulty node
+            forget_indices: Indices to be neutralized
+            faulty_node_idx: Index of faulty node
+            num_timesteps_input: number of sample input
+            num_timesteps_output: number of sample output
+            device,
+            A_wave: Graph edges (for STGCN)
+            
+        Returns:
+            Neutralized surrogate data
+        """
+        
+        _, _, timestep = dataset[0].shape
+        forget_indices = [[0, timestep]]
+        surrogate_sample = []
+        print(forget_indices)
+        if self.model_type == "stgcn":
+            for node_dataset in dataset:
+                surrogate_sample.append(self.surrogate_stgcn(model, node_dataset, forget_indices, faulty_node_idx, 
+                                                             num_timesteps_input, num_timesteps_output, device, A_wave))
+            # (B, N, F, T)
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+        
+        surrogate_sample = np.stack(surrogate_sample, axis=0)
+        surrogate_sample = surrogate_sample.mean(axis=0)
+        
+        surrogate_sample = self.add_error_minimizing_noise(
+            surrogate_sample, forget_indices, noise_scale=0.08 # Change accordingly to fit the desired 
+        )
+        
+        return surrogate_sample
+
 
 
 # -------------- Example usage function -------------------------

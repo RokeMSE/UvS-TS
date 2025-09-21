@@ -26,25 +26,6 @@ def generate_dataset(X, num_timesteps_input, num_timesteps_output):
         - Node targets for the samples. Shape is
           (num_samples, num_vertices, num_features, num_timesteps_output).
     """
-
-
-    # # Generate the beginning index and the ending index of a sample, which
-    # # contains (num_points_for_training + num_points_for_predicting) points
-    # indices = [(i, i + (num_timesteps_input + num_timesteps_output)) for i
-    #            in range(X.shape[2] - (num_timesteps_input + num_timesteps_output) + 1)]
-    # # (start : start + num_input + num_output) 
-
-    # # Save samples
-    # features, target = [], []
-    # for i, j in indices:
-    #     features.append(
-    #         X[:, :, i: i + num_timesteps_input].transpose(
-    #             (0, 2, 1)))
-    #     target.append(X[:, :, i + num_timesteps_input: j].transpose((0, 2, 1)))
-
-    # return torch.from_numpy(np.array(features)), torch.from_numpy(np.array(target))
-
-
     if isinstance(X, np.ndarray):
         X = torch.from_numpy(X).float() 
 

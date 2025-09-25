@@ -10,8 +10,8 @@ from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 num_timesteps_input = 12
 num_timesteps_output = 4
 
-epochs = 10
-batch_size = 256
+epochs = 100
+batch_size = 512
 
 parser = argparse.ArgumentParser(description='STGCN')
 parser.add_argument('--enable-cuda', action='store_true',
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     torch.manual_seed(3)
 
     A, X, means, stds = load_data_PEMS_BAY(args.input) # (N, F, T)
-    split_line = int(X.shape[2] * 0.01)
+    split_line = int(X.shape[2] * 0.8)
 
     train_original_data = X[:, :, :split_line]
     test_original_data = X[:, :, split_line:]

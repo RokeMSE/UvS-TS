@@ -8,7 +8,7 @@ from sklearn.metrics import mean_absolute_error, accuracy_score, precision_recal
 from typing import Dict, Tuple
 
 def get_model_predictions(model: nn.Module, data_loader: DataLoader, 
-                         A_wave: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.Tensor]:
+                         A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Tuple[torch.Tensor, torch.Tensor]:
     """Get model predictions """
     model.eval()
     predictions = []
@@ -39,19 +39,23 @@ def get_model_predictions(model: nn.Module, data_loader: DataLoader,
                 output = model.forward_unlearning(X_batch)
             else:
                 output = model(A_wave, X_batch)
+
+            # If evaluating a single node, slice the output to match the ground truth shape
+            if faulty_node_idx is not None and y_batch.shape[1] == 1 and output.shape[1] > 1:
+                output = output[:, faulty_node_idx:faulty_node_idx+1, :, :]
             
             predictions.append(output.cpu())
             ground_truth.append(y_batch.cpu())
             
     return torch.cat(predictions), torch.cat(ground_truth)
 
-def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, A_wave: torch.Tensor, device: str):
+def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
     Measure the performance preservation on the retain set.
     Higher is better.
     """
-    preds_unlearned, truth = get_model_predictions(model_unlearned, retain_loader, A_wave, device)
-    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device)
+    preds_unlearned, truth = get_model_predictions(model_unlearned, retain_loader, A_wave, device, faulty_node_idx)
+    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device, faulty_node_idx)
     
     error_unlearned = mean_absolute_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     error_original = mean_absolute_error(truth.numpy().flatten(), preds_original.numpy().flatten())
@@ -59,13 +63,13 @@ def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain
     # Return the ratio of errors, should ~ 1
     return error_original / (error_unlearned + 1e-8) # + 1e-8 to avoid division by zero (can be removed ?)
 
-def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, forget_loader: DataLoader, A_wave: torch.Tensor, device: str):
+def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, forget_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
     Measure how much the model has forgotten the forget set.
     Higher is better (unlearned model has a much higher error).
     """
-    preds_unlearned, truth = get_model_predictions(model_unlearned, forget_loader, A_wave, device)
-    preds_original, _ = get_model_predictions(model_original, forget_loader, A_wave, device)
+    preds_unlearned, truth = get_model_predictions(model_unlearned, forget_loader, A_wave, device, faulty_node_idx)
+    preds_original, _ = get_model_predictions(model_original, forget_loader, A_wave, device, faulty_node_idx)
     
     error_unlearned = mean_absolute_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     error_original = mean_absolute_error(truth.numpy().flatten(), preds_original.numpy().flatten())
@@ -73,12 +77,12 @@ def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, f
     # Return the difference in errors
     return error_unlearned - error_original
 
-def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, test_loader: DataLoader, A_wave: torch.Tensor, device: str):
+def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, test_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
     Measure the performance on the test set to check for overfitting to the retain set.
     Should ~1.0 (unlearned model performs similarly to original), if not there might be overfitting?
     """
-    preds_unlearned, truth = get_model_predictions(model_unlearned, test_loader, A_wave, device)
+    preds_unlearned, truth = get_model_predictions(model_unlearned, test_loader, A_wave, device) # No faulty_node_idx needed for test set
     preds_original, _ = get_model_predictions(model_original, test_loader, A_wave, device)
     
     error_unlearned = mean_absolute_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
@@ -86,20 +90,20 @@ def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, 
     
     return error_original / (error_unlearned + 1e-8) 
 
-def statistical_distance(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, A_wave: torch.Tensor, device: str):
+def statistical_distance(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
     Measure the statistical similarity between the original and unlearned models on the retain set.
     Lower is better.
     """
     pa_ewc = PopulationAwareEWC(device=device)
-    preds_unlearned, _ = get_model_predictions(model_unlearned, retain_loader, A_wave, device)
-    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device)
+    preds_unlearned, _ = get_model_predictions(model_unlearned, retain_loader, A_wave, device, faulty_node_idx)
+    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device, faulty_node_idx)
     
     # Calculate the L_pop loss between the two distributions of predictions
     return pa_ewc.calculate_L_pop(preds_unlearned, preds_original).item()
 
 
-def get_model_losses(model: nn.Module, data_loader: DataLoader, A_wave: torch.Tensor, device: str):
+def get_model_losses(model: nn.Module, data_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
     Get the per-sample loss for a given data loader.
     """
@@ -115,14 +119,18 @@ def get_model_losses(model: nn.Module, data_loader: DataLoader, A_wave: torch.Te
             
             output = model(A_wave, X_batch)
             
+            # If evaluating a single node, slice the output to match the ground truth shape
+            if faulty_node_idx is not None and y_batch.shape[1] == 1 and output.shape[1] > 1:
+                output = output[:, faulty_node_idx:faulty_node_idx+1, :, :]
+
             # Calculate loss for each sample in the batch
             # Reshape to (batch_size, -1) and take the mean over the last dimension
-            loss = loss_criterion(output, y_batch).mean(dim=[1, 2])
+            loss = loss_criterion(output, y_batch).mean(dim=[1, 2, 3]) # Mean over all but batch dim
             losses.append(loss.cpu())
             
     return torch.cat(losses)
 
-def membership_inference_attack(model_unlearned: nn.Module, forget_loader: DataLoader, test_loader: DataLoader, A_wave: torch.Tensor, device: str) -> Dict[str, float]:
+def membership_inference_attack(model_unlearned: nn.Module, forget_loader: DataLoader, test_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Dict[str, float]:
     """
     Performs a Membership Inference Attack to evaluate unlearning effectiveness.
     
@@ -130,8 +138,8 @@ def membership_inference_attack(model_unlearned: nn.Module, forget_loader: DataL
         A dictionary with the attack model's accuracy, precision, recall, and f1-score.
     """
     # 1. Get losses for the unlearned model on forget and test sets
-    forget_losses = get_model_losses(model_unlearned, forget_loader, A_wave, device)
-    test_losses = get_model_losses(model_unlearned, test_loader, A_wave, device)
+    forget_losses = get_model_losses(model_unlearned, forget_loader, A_wave, device, faulty_node_idx)
+    test_losses = get_model_losses(model_unlearned, test_loader, A_wave, device) # No faulty_node_idx for test set
     
     # 2. Create training data for the attack model
     # Members (from forget set) are labeled 1, Non-members (from test set) are labeled 0
@@ -155,7 +163,7 @@ def membership_inference_attack(model_unlearned: nn.Module, forget_loader: DataL
     y_pred = attack_model.predict(X_test)
     
     accuracy = accuracy_score(y_test, y_pred)
-    precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average='binary')
+    precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average='binary', zero_division=0)
     
     return {
         "mia_accuracy": accuracy,
@@ -165,18 +173,18 @@ def membership_inference_attack(model_unlearned: nn.Module, forget_loader: DataL
     }
 
 # --------- Main evaluation function -----------"
-def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, forget_loader: DataLoader, test_loader: DataLoader, A_wave: torch.Tensor, device: str) -> Dict[str, float]:
+def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, forget_loader: DataLoader, test_loader: DataLoader, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Dict[str, float]:
     """
     Run everything.
     """
     results = {}
     # 1. Fidelity Score
     results["fidelity_score"] = fidelity_score(
-        model_unlearned, model_original, retain_loader, A_wave, device
+        model_unlearned, model_original, retain_loader, A_wave, device, faulty_node_idx
     )
     # 2. Forgetting Efficacy
     results["forgetting_efficacy"] = forgetting_efficacy(
-        model_unlearned, model_original, forget_loader, A_wave, device
+        model_unlearned, model_original, forget_loader, A_wave, device, faulty_node_idx
     )
     # 3. Generalization Score
     results["generalization_score"] = generalization_score(
@@ -184,11 +192,11 @@ def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module, r
     )
     # 4. Statistical Distance
     results["statistical_distance"] = statistical_distance(
-        model_unlearned, model_original, retain_loader, A_wave, device
+        model_unlearned, model_original, retain_loader, A_wave, device, faulty_node_idx
     )
     # 5. Membership Inference Attack
     mia_results = membership_inference_attack(
-        model_unlearned, forget_loader, test_loader, A_wave, device
+        model_unlearned, forget_loader, test_loader, A_wave, device, faulty_node_idx
     )
     results.update(mia_results) # Merge the dictionaries
     return results

@@ -59,11 +59,12 @@ class SATimeSeries:
     from test set. We need to make forget set loss distribution match test set.
     """
     
-    def __init__(self, model, device="cuda"):
+    def __init__(self, model, A_wave, device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.original_model = copy.deepcopy(model).to(self.device)
         self.original_model.eval()
         self.model = copy.deepcopy(model).to(self.device)
+        self.new_A_wave = copy.deepcopy(A_wave).to(self.device)
         
         for param in self.model.parameters():
             param.data = param.data.float()
@@ -521,6 +522,9 @@ class SATimeSeries:
             lambda_ewc, lambda_surrogate, lambda_retain, lambda_forget_calibrated
         )
         
+        self.new_A_wave[faulty_node_idx, :] = 0
+        self.new_A_wave[:, faulty_node_idx] = 0 
+
         # Update adjacency matrix and dataset (removing the faulty node)
         # A_new = copy.deepcopy(A_wave)
         # A_new = torch.cat([A_new[:faulty_node_idx], A_new[faulty_node_idx+1:]], dim=0)

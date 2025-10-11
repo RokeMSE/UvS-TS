@@ -53,7 +53,7 @@ else:
 
 class SATimeSeries:
     """Complete SA-TS Framework Integration"""
-    def __init__(self, model, device="cuda"):
+    def __init__(self, model, A_wave, device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         
         # --- Store the original model state for evaluation ---
@@ -61,7 +61,7 @@ class SATimeSeries:
         self.original_model.eval()
         
         self.model = copy.deepcopy(model).to(self.device) # This is the model that will be modified during unlearning
-        
+        self.new_A_wave = copy.deepcopy(A_wave).to(self.device)
         # Ensure model parameters are float32
         for param in self.model.parameters():
             param.data = param.data.float()
@@ -95,9 +95,10 @@ class SATimeSeries:
         )
         print(f"Forget samples: {len(forget_indices)}, Retain samples: {len(retain_indices)}")
         
+        global forget_loader, retain_loader
+
         if not forget_indices:
             print("No forget samples found to unlearn. Skipping training.")
-            global forget_loader, retain_loader
             forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0))) # Empty dataloader
             # Create a loader with all training data for retain_loader as nothing is forgotten
             training_input, training_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
@@ -298,13 +299,12 @@ class SATimeSeries:
                                 num_epochs, learning_rate,
                                 lambda_ewc, lambda_surrogate, lambda_retain)
         
-        A_new = copy.deepcopy(A_wave)
-        A_new = torch.cat([A_new[:faulty_node_idx], A_new[faulty_node_idx+1:]], dim=0)
-        A_new = torch.cat([A_new[:, :faulty_node_idx], A_new[:, faulty_node_idx+1:]], dim=1)
+        self.new_A_wave[faulty_node_idx, :] = 0
+        self.new_A_wave[:, faulty_node_idx] = 0 
 
-        dataset_new = copy.deepcopy(dataset)
-        dataset_new = torch.from_numpy(dataset_new)
-        dataset_new = torch.cat([dataset_new[:faulty_node_idx], dataset_new[faulty_node_idx+1:]], dim=0)
+        # dataset_new = copy.deepcopy(dataset)
+        # dataset_new = torch.from_numpy(dataset_new)
+        # dataset_new = torch.cat([dataset_new[:faulty_node_idx], dataset_new[faulty_node_idx+1:]], dim=0)
 
         """ if not os.path.exists(args.input + f"/Unlearn_node_{faulty_node_idx}"):
             os.makedirs(args.input + f"/Unlearn_node_{faulty_node_idx}")
@@ -312,7 +312,7 @@ class SATimeSeries:
         with open(args.input + f"/Unlearn_node_{faulty_node_idx}/adj_mx_bay.pkl", "wb") as f:
             pickle.dump(A_new, f) """
 
-        return history
+        return history, dataset
 
 
     def training(self, surrogate_loader, retain_loader, A_wave,
@@ -442,7 +442,7 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
     
     # --- Initialize SA-TS framework, which now stores the original model ---
-    sa_ts = SATimeSeries(model, args.device)
+    sa_ts = SATimeSeries(model, A_wave, args.device)
     
     # Run unlearning on the training data portion
     # TESTING FOR BEST PARAMETERS   

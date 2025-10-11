@@ -28,7 +28,7 @@ if args.enable_cuda and torch.cuda.is_available():
 else:
     args.device = torch.device('cpu')
 
-def train_epoch(training_input, training_target, batch_size):
+def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size):
     """
     Trains one epoch with the given data.
     :param training_input: Training inputs of shape (num_samples, num_nodes,
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     training_losses = []
 
     for epoch in range(epochs):
-        loss = train_epoch(training_input, training_target,
+        loss = train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target,
                             batch_size=batch_size)
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")

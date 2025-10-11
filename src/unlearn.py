@@ -445,20 +445,22 @@ def main():
     sa_ts = SATimeSeries(model, args.device)
     
     # Run unlearning on the training data portion
+    # TESTING FOR BEST PARAMETERS   
     if args.unlearn_node:
         history = sa_ts.unlearn_faulty_node(
-        train_original_data, args.node_idx, A_wave, means, stds,
-        num_timesteps_input, num_timesteps_output,
-        top_k_node=2, num_epochs=100, learning_rate=5e-5,
-        lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512
+            train_original_data, args.node_idx, A_wave, means, stds,
+            num_timesteps_input, num_timesteps_output,
+            top_k_node=2, num_epochs=100, learning_rate=1e-5,
+            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
         )
     else:
         history = sa_ts.unlearn_faulty_subset(
-        train_original_data, forget_array, args.node_idx, A_wave, means, stds,
-        num_timesteps_input, num_timesteps_output,
-        threshold=0.3, num_epochs=100, learning_rate=5e-5,
-        lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512
+            train_original_data, forget_array, args.node_idx, A_wave, means, stds,
+            num_timesteps_input, num_timesteps_output,
+            threshold=0.3, num_epochs=100, learning_rate=1e-5,
+            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
         )
+
 
     if args.unlearn_node:
         path = args.model + f"/Unlearn node {args.node_idx}"

@@ -35,6 +35,7 @@ def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
     retain_indices = []
     # Handle case where no motifs are found
     if not forget_indices:
+        print("Warning: No motifs found with the given threshold. Entire dataset is considered 'retain'.")
         retain_indices.append([0, time_step])
         return forget_indices, retain_indices
 

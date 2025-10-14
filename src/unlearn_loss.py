@@ -28,29 +28,6 @@ from evaluate import (
 import sys
 sys.path.append('src')
 
-parser = argparse.ArgumentParser(description='Unlearning')
-parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
-parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
-parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
-parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
-parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
-parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
-
-
-args = parser.parse_args()
-if args.unlearn_node:
-    if args.forget_set is not None:
-        print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
-else:
-    if args.forget_set is None:
-        parser.error("--forget_set is required unless --unlearn-node is specified.")
-
-args.device = None
-if args.enable_cuda and torch.cuda.is_available():
-    args.device = torch.device('cuda')
-else:
-    args.device = torch.device('cpu')
-
 class SATimeSeries:
     """
     Enhanced SA-TS Framework with Better MIA Defense
@@ -534,7 +511,7 @@ class SATimeSeries:
 
 def main():
     """Main execution with MIA defense"""
-    
+
     # Clear memory
     torch.cuda.empty_cache()
     
@@ -712,5 +689,28 @@ If MIA recall is STILL high after these changes:
 """
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Unlearning')
+    parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
+    parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
+    parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
+    parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
+    parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
+    parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
+
+
+    args = parser.parse_args()
+    if args.unlearn_node:
+        if args.forget_set is not None:
+            print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
+    else:
+        if args.forget_set is None:
+            parser.error("--forget_set is required unless --unlearn-node is specified.")
+
+    args.device = None
+    if args.enable_cuda and torch.cuda.is_available():
+        args.device = torch.device('cuda')
+    else:
+        args.device = torch.device('cpu')
+        
     main()
 

@@ -28,28 +28,7 @@ from evaluate import (
 import sys
 sys.path.append('src')
 
-parser = argparse.ArgumentParser(description='Unlearning')
-parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
-parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
-parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
-parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
-parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
-parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
 
-
-args = parser.parse_args()
-if args.unlearn_node:
-    if args.forget_set is not None:
-        print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
-else:
-    if args.forget_set is None:
-        parser.error("--forget_set is required unless --unlearn-node is specified.")
-
-args.device = None
-if args.enable_cuda and torch.cuda.is_available():
-    args.device = torch.device('cuda')
-else:
-    args.device = torch.device('cpu')
 
 class SATimeSeries:
     """Complete SA-TS Framework Integration"""
@@ -457,11 +436,13 @@ def main():
         history = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_array, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
-            threshold=0.3, num_epochs=100, learning_rate=1e-5,
+            threshold=10, num_epochs=100, learning_rate=1e-5,
             lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
         )
 
-
+    if history == []:
+        return 
+     
     if args.unlearn_node:
         path = args.model + f"/Unlearn node {args.node_idx}"
     else:
@@ -510,5 +491,28 @@ def main():
     print("Unlearning completed!")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Unlearning')
+    parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
+    parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
+    parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
+    parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
+    parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
+    parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
+
+
+    args = parser.parse_args()
+    if args.unlearn_node:
+        if args.forget_set is not None:
+            print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
+    else:
+        if args.forget_set is None:
+            parser.error("--forget_set is required unless --unlearn-node is specified.")
+
+    args.device = None
+    if args.enable_cuda and torch.cuda.is_available():
+        args.device = torch.device('cuda')
+    else:
+        args.device = torch.device('cpu')
+
     main()
 

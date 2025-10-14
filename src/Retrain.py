@@ -19,33 +19,14 @@ from evaluate import (
     generalization_score, statistical_distance, membership_inference_attack,
     get_model_predictions
 )
-
 from train import train_epoch
+import sys
+sys.path.append('src')
+
 
 epochs = 100
-batch_size = 512
+batch_size = 64
 
-parser = argparse.ArgumentParser(description='Retrain')
-parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
-parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
-parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
-parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
-parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
-parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
-
-args = parser.parse_args()
-if args.unlearn_node:
-    if args.forget_set is not None:
-        print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
-else:
-    if args.forget_set is None:
-        parser.error("--forget_set is required unless --unlearn-node is specified.")
-
-args.device = None
-if args.enable_cuda and torch.cuda.is_available():
-    args.device = torch.device('cuda')
-else:
-    args.device = torch.device('cpu')
 
 def fill_missing_with_node_mean(data):
     '''
@@ -185,27 +166,6 @@ def main():
             content = f.read().strip()
             values = content.split(",")
             forget_array = np.array([float(v) for v in values], dtype=np.float32)
-    
-    A_wave = get_normalized_adj(A)
-    A_wave = torch.from_numpy(A_wave).float().to(args.device)
-    new_A_wave = A_wave
-
-    split_line = int(new_dataset.shape[2] * 0.8)
-
-    train_original_data = new_dataset[:, :, :split_line]
-    train_original_data = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
-    test_original_data = new_dataset[:, :, split_line:]
-
-    if args.unlearn_node:
-        print("UNLEARNING NODE...\n")
-        new_A_wave = fix_data_for_node(A_wave, args.node_idx)
-    else:
-        print("UNLEARNING SUBSET...\n")
-        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(train_original_data, forget_array, args.node_idx, 0.3)
-        means = np.mean(new_dataset, axis=(0, 2))
-        new_dataset = new_dataset - means.reshape(1, -1, 1)
-        stds = np.std(new_dataset, axis=(0, 2))
-        new_dataset = new_dataset / stds.reshape(1, -1, 1)
 
     checkpoint = torch.load(args.model + "/model.pt", map_location=args.device)
     original_model = STGCN(**checkpoint["config"]).to(args.device)
@@ -214,7 +174,34 @@ def main():
     config = checkpoint["config"]
     num_timesteps_input = config["num_timesteps_input"]
     num_timesteps_output = config["num_timesteps_output"]
+    
+    A_wave = get_normalized_adj(A)
+    A_wave = torch.from_numpy(A_wave).float().to(args.device)
+    new_A_wave = A_wave
 
+    split_line = int(X.shape[2] * 0.8)
+
+    train_original_data = X[:, :, :split_line]
+    new_train_original_data = train_original_data
+    train_original_data = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
+    test_original_data = X[:, :, split_line:]
+
+    if args.unlearn_node:
+        print("UNLEARNING NODE...\n")
+        new_A_wave = fix_data_for_node(A_wave, args.node_idx)
+        
+    else:
+        print("UNLEARNING SUBSET...\n")
+        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(train_original_data, forget_array, args.node_idx, 
+                                                                                      num_timesteps_input, num_timesteps_output, 10)
+        if forget_indices == []:
+            print("NOT FIND SUBSET TO UNLEARN")
+            return
+
+        means = np.mean(new_train_original_data, axis=(0, 2))
+        new_train_original_data = new_train_original_data - means.reshape(1, -1, 1)
+        stds = np.std(new_train_original_data, axis=(0, 2))
+        new_train_original_data = new_train_original_data / stds.reshape(1, -1, 1)
     
 
     training_input, training_target = generate_dataset(new_train_original_data,
@@ -238,7 +225,7 @@ def main():
     training_losses = []
     for epoch in range(epochs):
         loss = train_epoch(new_model, new_A_wave, loss_criterion, optimizer ,training_input, training_target,
-                            batch_size=batch_size)
+                            batch_size=batch_size, device=args.device)
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
     
@@ -256,4 +243,28 @@ def main():
     )
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Unlearning')
+    parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
+    parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
+    parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
+    parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
+    parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
+    parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
+
+
+    args = parser.parse_args()
+    if args.unlearn_node:
+        if args.forget_set is not None:
+            print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
+    else:
+        if args.forget_set is None:
+            parser.error("--forget_set is required unless --unlearn-node is specified.")
+
+    args.device = None
+    if args.enable_cuda and torch.cuda.is_available():
+        args.device = torch.device('cuda')
+    else:
+        args.device = torch.device('cpu')
+
+
     main()

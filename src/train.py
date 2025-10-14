@@ -13,22 +13,7 @@ num_timesteps_output = 4
 epochs = 100
 batch_size = 512
 
-parser = argparse.ArgumentParser(description='STGCN')
-parser.add_argument('--enable-cuda', action='store_true',
-                    help='Enable CUDA')
-parser.add_argument('--input', type=str, required=True,
-                    help='Path to the directory containing dataset')
-parser.add_argument('--model', type=str, required=True,
-                    help='Path to the directory containing weights of model')
-
-args = parser.parse_args()
-args.device = None
-if args.enable_cuda and torch.cuda.is_available():
-    args.device = torch.device('cuda')
-else:
-    args.device = torch.device('cpu')
-
-def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size):
+def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size, device):
     """
     Trains one epoch with the given data.
     :param training_input: Training inputs of shape (num_samples, num_nodes,
@@ -47,8 +32,8 @@ def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, traini
 
         indices = permutation[i:i + batch_size]
         X_batch, y_batch = training_input[indices], training_target[indices]
-        X_batch = X_batch.float().to(device=args.device)
-        y_batch = y_batch.float().to(device=args.device)
+        X_batch = X_batch.float().to(device)
+        y_batch = y_batch.float().to(device)
 
         out = model(A_wave, X_batch)
         loss = loss_criterion(out, y_batch)
@@ -59,6 +44,23 @@ def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, traini
     return sum(epoch_training_losses)/len(epoch_training_losses)
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description='STGCN')
+    parser.add_argument('--enable-cuda', action='store_true',
+                        help='Enable CUDA')
+    parser.add_argument('--input', type=str, required=True,
+                        help='Path to the directory containing dataset')
+    parser.add_argument('--model', type=str, required=True,
+                        help='Path to the directory containing weights of model')
+
+    args = parser.parse_args()
+    args.device = None
+    if args.enable_cuda and torch.cuda.is_available():
+        args.device = torch.device('cuda')
+    else:
+        args.device = torch.device('cpu')
+
+
     torch.manual_seed(3)
 
     A, X, means, stds = load_data_PEMS_BAY(args.input) # (N, F, T)
@@ -93,7 +95,7 @@ if __name__ == '__main__':
 
     for epoch in range(epochs):
         loss = train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target,
-                            batch_size=batch_size)
+                            batch_size=batch_size, device=args.device)
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
 

@@ -41,7 +41,7 @@ class SATimeSeries:
         self.original_model = copy.deepcopy(model).to(self.device)
         self.original_model.eval()
         self.model = copy.deepcopy(model).to(self.device)
-        self.new_A_wave = copy.deepcopy(A_wave).to(self.device)
+        self.new_A_wave = copy.deepcopy(A_wave).to(self.device) if isinstance(A_wave, torch.Tensor) else A_wave
         
         for param in self.model.parameters():
             param.data = param.data.float()
@@ -557,7 +557,7 @@ def main():
     torch.cuda.empty_cache()
     
     # Initialize SA-TS
-    sa_ts = SATimeSeries(model, args.device)
+    sa_ts = SATimeSeries(model, A_wave, device=args.device)
     
     torch.cuda.empty_cache()
     
@@ -599,15 +599,15 @@ def main():
         path = args.model + f"/Unlearn node {args.node_idx}"
     else:
         path = args.model + f"/Unlearn subset on node {args.node_idx}"
-    
     if not os.path.exists(path):
         os.makedirs(path)
     
+    """
     save_dict = {
         "model_state_dict": sa_ts.model.state_dict(),
         "config": sa_ts.model.config
     }
-    torch.save(save_dict, path + "/model.pt")
+    torch.save(save_dict, path + "/model.pt") """
 
     torch.cuda.empty_cache()
 
@@ -637,6 +637,7 @@ def main():
         retain_loader=retain_loader, # This loader is correct (from neighbor data)
         forget_loader=forget_loader, # NOW this contains the correct data for evaluation
         test_loader=test_loader,
+        new_A_wave=sa_ts.new_A_wave, 
         A_wave=A_wave,
         device=args.device,
         faulty_node_idx=args.node_idx
@@ -645,7 +646,7 @@ def main():
     # Save results
     with open(path + "/unlearned_eval_results.txt", "w") as f:
         for metric, value in evaluation_results.items():
-            f.write(f"{metric}: {value:.4f}\n")
+            f.write(f"{metric}: {value:.4f}\n") 
 
     print("\n--- Evaluation Results ---")
     for metric, value in evaluation_results.items():

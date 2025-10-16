@@ -228,7 +228,17 @@ def main():
                             batch_size=batch_size, device=args.device)
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
-    
+
+    torch.cuda.empty_cache()
+
+    # Save model
+    if args.unlearn_node:
+        path = args.model + f"/Retrain Unlearn node {args.node_idx}"
+    else:
+        path = args.model + f"/Retrain Unlearn subset on node {args.node_idx}"
+    if not os.path.exists(path):
+        os.makedirs(path)
+
     print("\nEvaluating unlearned model...")
     evaluation_results = evaluate_unlearning(
         model_unlearned=new_model,
@@ -241,6 +251,10 @@ def main():
         device=args.device,
         faulty_node_idx=args.node_idx
     )
+
+    with open(path + "/retrain_eval_results.txt", "w") as f:
+        for metric, value in evaluation_results.items():
+            f.write(f"{metric}: {value:.4f}\n") 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Unlearning')

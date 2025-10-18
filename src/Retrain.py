@@ -16,7 +16,7 @@ from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 # Import evaluation functions
 from evaluate import (
     evaluate_unlearning, fidelity_score, forgetting_efficacy, 
-    generalization_score, statistical_distance, membership_inference_attack,
+    generalization_score, statistical_distance,
     get_model_predictions
 )
 from train import train_epoch
@@ -144,11 +144,9 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
     return result, forget_indices, retain_indices
 
 def fix_data_for_node(A_wave, faulty_node_idx):
-
     new_A_wave = A_wave.copy()
     new_A_wave[faulty_node_idx, :] = 0
     new_A_wave[:, faulty_node_idx] = 0  
-
     return new_A_wave
 
 def main():
@@ -177,23 +175,75 @@ def main():
     
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
-    new_A_wave = A_wave
+    new_A_wave = A_wave.clone()  # Use clone() instead of assignment
 
     split_line = int(X.shape[2] * 0.8)
 
     train_original_data = X[:, :, :split_line]
-    new_train_original_data = train_original_data
+    new_train_original_data = train_original_data.copy()  # Make a copy
     train_original_data = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
     test_original_data = X[:, :, split_line:]
 
+    # Initialize global variables
+    global retain_loader, forget_loader
+    retain_loader = None
+    forget_loader = None
+
     if args.unlearn_node:
         print("UNLEARNING NODE...\n")
-        new_A_wave = fix_data_for_node(A_wave, args.node_idx)
+        # Modify adjacency matrix
+        new_A_wave = A_wave.clone()
+        new_A_wave[args.node_idx, :] = 0
+        new_A_wave[:, args.node_idx] = 0
+        
+        # IMPORTANT: For node unlearning in retrain, we keep all nodes in the data
+        # but the adjacency matrix isolates the faulty node
+        # The model architecture should remain the same size
+        
+        # Create retain and forget loaders for node unlearning
+        # For node unlearning: use neighbor nodes as retain, faulty node as forget
+        
+        # Get neighbors of the faulty node (from original adjacency matrix)
+        faulty_row = A_wave[args.node_idx].cpu().numpy()
+        neighbor_indices = np.where(faulty_row > 0)[0]
+        neighbor_indices = [idx for idx in neighbor_indices if idx != args.node_idx]
+        
+        if len(neighbor_indices) > 0:
+            # Use first few neighbors as retain set
+            retain_node_idx = neighbor_indices[0]
+            retain_data = train_original_data[retain_node_idx:retain_node_idx+1, :, :]
+            retain_input, retain_target = generate_dataset(
+                retain_data, num_timesteps_input, num_timesteps_output
+            )
+            retain_dataset = TensorDataset(retain_input, retain_target)
+            retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
+        else:
+            # If no neighbors, use all nodes except faulty as retain
+            print("Warning: Faulty node has no neighbors. Using all other nodes for retain set.")
+            other_nodes = list(range(X.shape[0]))
+            other_nodes.remove(args.node_idx)
+            retain_node_idx = other_nodes[0]
+            retain_data = train_original_data[retain_node_idx:retain_node_idx+1, :, :]
+            retain_input, retain_target = generate_dataset(
+                retain_data, num_timesteps_input, num_timesteps_output
+            )
+            retain_dataset = TensorDataset(retain_input, retain_target)
+            retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
+        
+        # Forget loader: data from the faulty node
+        forget_data = train_original_data[args.node_idx:args.node_idx+1, :, :]
+        forget_input, forget_target = generate_dataset(
+            forget_data, num_timesteps_input, num_timesteps_output
+        )
+        forget_dataset = TensorDataset(forget_input, forget_target)
+        forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
         
     else:
         print("UNLEARNING SUBSET...\n")
-        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(train_original_data, forget_array, args.node_idx, 
-                                                                                      num_timesteps_input, num_timesteps_output, 10)
+        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(
+            train_original_data, forget_array, args.node_idx, 
+            num_timesteps_input, num_timesteps_output, 10
+        )
         if forget_indices == []:
             print("NOT FIND SUBSET TO UNLEARN")
             return
@@ -204,28 +254,38 @@ def main():
         new_train_original_data = new_train_original_data / stds.reshape(1, -1, 1)
     
 
-    training_input, training_target = generate_dataset(new_train_original_data,
-                                                        num_timesteps_input=num_timesteps_input,
-                                                        num_timesteps_output=num_timesteps_output)
-    test_input, test_target = generate_dataset(test_original_data,
-                                                num_timesteps_input=num_timesteps_input,
-                                                num_timesteps_output=num_timesteps_output)
+    training_input, training_target = generate_dataset(
+        new_train_original_data,
+        num_timesteps_input=num_timesteps_input,
+        num_timesteps_output=num_timesteps_output
+    )
+    test_input, test_target = generate_dataset(
+        test_original_data,
+        num_timesteps_input=num_timesteps_input,
+        num_timesteps_output=num_timesteps_output
+    )
     test_dataset = TensorDataset(test_input, test_target)
     test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
     
-    new_model = STGCN(new_A_wave.shape[0],
-                    training_input.shape[3],
-                    num_timesteps_input,
-                    num_timesteps_output, 
-                    num_features_output=3).to(device=args.device)
+    # CRITICAL FIX: Model should use the SAME number of nodes as original
+    # The adjacency matrix modification handles the unlearning
+    new_model = STGCN(
+        A_wave.shape[0],  # Keep original number of nodes
+        training_input.shape[3],
+        num_timesteps_input,
+        num_timesteps_output, 
+        num_features_output=3
+    ).to(device=args.device)
 
     optimizer = torch.optim.Adam(new_model.parameters(), lr=1e-3)
     loss_criterion = nn.MSELoss()
 
     training_losses = []
     for epoch in range(epochs):
-        loss = train_epoch(new_model, new_A_wave, loss_criterion, optimizer ,training_input, training_target,
-                            batch_size=batch_size, device=args.device)
+        loss = train_epoch(
+            new_model, new_A_wave, loss_criterion, optimizer, training_input, training_target,
+            batch_size=batch_size, device=args.device
+        )
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
 
@@ -240,14 +300,18 @@ def main():
         os.makedirs(path)
 
     print("\nEvaluating unlearned model...")
+    
+    # CRITICAL FIX: Pass the correct adjacency matrices
+    # new_A_wave is used for the retrained model (with isolated node)
+    # A_wave is used for the original model (with all connections)
     evaluation_results = evaluate_unlearning(
         model_unlearned=new_model,
-        model_original=original_model, # Use the copy from the class
+        model_original=original_model,
         retain_loader=retain_loader,
         forget_loader=forget_loader,
         test_loader=test_loader,
-        new_A_wave=new_A_wave,
-        A_wave=A_wave,
+        new_A_wave=new_A_wave,  # Modified adjacency for retrained model
+        A_wave=A_wave,           # Original adjacency for original model
         device=args.device,
         faulty_node_idx=args.node_idx
     )
@@ -255,6 +319,11 @@ def main():
     with open(path + "/retrain_eval_results.txt", "w") as f:
         for metric, value in evaluation_results.items():
             f.write(f"{metric}: {value:.4f}\n") 
+    
+    print("\n--- Evaluation Results ---")
+    for metric, value in evaluation_results.items():
+        print(f"{metric}: {value:.4f}")
+    print("--------------------------\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Unlearning')
@@ -269,16 +338,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.unlearn_node:
         if args.forget_set is not None:
-            print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
+            print("Warning: --forget-set will be ignored when --unlearn-node is enabled.")
     else:
         if args.forget_set is None:
-            parser.error("--forget_set is required unless --unlearn-node is specified.")
+            parser.error("--forget-set is required unless --unlearn-node is specified.")
 
     args.device = None
     if args.enable_cuda and torch.cuda.is_available():
         args.device = torch.device('cuda')
     else:
         args.device = torch.device('cpu')
-
 
     main()

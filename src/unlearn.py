@@ -20,15 +20,9 @@ from unlearning.t_gr import TemporalGenerativeReplay
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 # Import evaluation functions
-from evaluate import (
-    evaluate_unlearning, fidelity_score, forgetting_efficacy, 
-    generalization_score, statistical_distance, membership_inference_attack,
-    get_model_predictions
-)
+from evaluate import evaluate_unlearning
 import sys
 sys.path.append('src')
-
-
 
 class SATimeSeries:
     """Complete SA-TS Framework Integration"""

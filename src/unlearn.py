@@ -457,6 +457,7 @@ def main():
         retain_loader=retain_loader,
         forget_loader=forget_loader,
         test_loader=test_loader,
+        new_A_wave=sa_ts.new_A_wave,
         A_wave=A_wave,
         device=args.device,
         faulty_node_idx=args.node_idx

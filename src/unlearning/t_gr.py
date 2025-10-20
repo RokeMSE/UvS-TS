@@ -214,7 +214,7 @@ class TemporalGenerativeReplay:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
         surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, forget_indices, noise_scale=3.5 # Change accordingly to fit the desired 
+            surrogate_sample, forget_indices, noise_scale=1.5 # Change accordingly to fit the desired 
         )
         
         return surrogate_sample
@@ -259,7 +259,7 @@ class TemporalGenerativeReplay:
         surrogate_sample = surrogate_sample.mean(axis=0)
         
         surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, forget_indices, noise_scale=3.5 # Change accordingly to fit the desired 
+            surrogate_sample, forget_indices, noise_scale=1.5 # Change accordingly to fit the desired 
         )
         
         return surrogate_sample

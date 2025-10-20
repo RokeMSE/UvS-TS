@@ -24,7 +24,7 @@ sys.path.append('src')
 
 
 epochs = 100
-batch_size = 64
+batch_size = 512
 
 
 def fill_missing_with_node_mean(data):
@@ -52,7 +52,7 @@ def fill_missing_with_node_mean(data):
 
     return data_filled
 
-def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_timesteps_output, threshold):
+def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_timesteps_output, threshold, means, stds):
     new_dataset = dataset.copy()
     S = dataset[:, 1, :]
     u_mean, u_std = u.mean(), u.std() or 1.0
@@ -94,17 +94,23 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
         training_input, training_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
         retain_loader = DataLoader(TensorDataset(training_input, training_target), batch_size=batch_size, shuffle=True)
     else:
-        forget_data = []
-        for item in forget_indices:
-            forget_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]]) 
+    # Normalize the data before generating datasets for the loaders
+        means_r = means.reshape(1, -1, 1)
+        stds_r = stds.reshape(1, -1, 1)
 
-        retain_data = []
+        forget_data_normalized = []
+        for item in forget_indices:
+            data_seg = dataset[faulty_node_idx:faulty_node_idx+1, :, item[0]:item[1]]
+            forget_data_normalized.append((data_seg - means_r) / stds_r)
+
+        retain_data_normalized = []
         for item in retain_indices:
-            retain_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]])
+            data_seg = dataset[faulty_node_idx:faulty_node_idx+1, :, item[0]:item[1]]
+            retain_data_normalized.append((data_seg - means_r) / stds_r)
 
         all_features_retain = []
         all_targets_retain = []
-        for item in retain_data:
+        for item in retain_data_normalized: # <-- Use the normalized list
             feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
             if feature.numel() > 0:
                 all_features_retain.append(feature)
@@ -121,7 +127,7 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
 
         all_features_forget = []
         all_targets_forget = []
-        for item in forget_data:
+        for item in forget_data_normalized: # <-- Use the normalized list
             feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
             if feature.numel() > 0:
                 all_features_forget.append(feature)
@@ -137,7 +143,6 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
             forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
 
     result = fill_missing_with_node_mean(new_dataset)
-
     return result, forget_indices, retain_indices
 
 def fix_data_for_node(A_wave, faulty_node_idx):
@@ -236,7 +241,8 @@ def main():
         
         new_train_denorm, forget_indices, retain_indices = fix_data_for_subset(
             train_denorm, forget_array, args.node_idx, 
-            num_timesteps_input, num_timesteps_output, 10
+            num_timesteps_input, num_timesteps_output, 10,
+            means, stds
         )
         if forget_indices == []:
             print("NOT FIND SUBSET TO UNLEARN")

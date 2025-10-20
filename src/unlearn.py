@@ -424,14 +424,14 @@ def main():
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             top_k_node=2, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=5.0, lambda_retain=1.0, batch_size=512
         )
     else:
         history = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_array, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             threshold=10, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=5.0, lambda_retain=1.0, batch_size=512
         )
 
     if history == []:
@@ -464,9 +464,7 @@ def main():
     )
 
     # Save eval results
-    if not os.path.exists(args.model):
-        os.makedirs(args.model)
-    with open(args.model + "/unlearned_eval_results.txt", "w") as f:
+    with open(path + "/evaluation_results.txt", "w") as f:     
         for metric, value in evaluation_results.items():
             f.write(f"{metric}: {value:.4f}\n")
 

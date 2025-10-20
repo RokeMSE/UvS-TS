@@ -13,7 +13,6 @@ from tslearn.metrics import dtw
 from models.stgcn import STGCN
 from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
-# Import evaluation functions
 from evaluate import (
     evaluate_unlearning, fidelity_score, forgetting_efficacy, 
     generalization_score, statistical_distance,
@@ -71,7 +70,6 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
                 forget_indices.append([i, i + window_size])
 
     retain_indices = []
-    # Handle case where no motifs are found
     if not forget_indices:
         print("Warning: No motifs found with the given threshold. Entire dataset is considered 'retain'.")
         retain_indices.append([0, time_step])
@@ -92,8 +90,7 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
     global forget_loader, retain_loader
     if not forget_indices:
         print("No forget samples found to unlearn. Skipping training.")
-        forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0))) # Empty dataloader
-        # Create a loader with all training data for retain_loader as nothing is forgotten
+        forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0)))
         training_input, training_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
         retain_loader = DataLoader(TensorDataset(training_input, training_target), batch_size=batch_size, shuffle=True)
     else:
@@ -132,7 +129,7 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
         
         if not all_features_forget:
             print("No forget samples generated. Unlearning will not be performed.")
-            forget_loader = [] # Empty loader is ok, training will be skipped
+            forget_loader = []
         else:
             all_features_forget = torch.cat(all_features_forget, dim=0)
             all_targets_forget = torch.cat(all_targets_forget, dim=0)
@@ -154,7 +151,7 @@ def main():
     # Load data
     print("Loading PEMS-BAY data...")
     A, X, means, stds = load_data_PEMS_BAY(args.input)
-    # N, F, T
+    # X is already normalized: (N, F, T)
     X = X.astype(np.float32)
     means = means.astype(np.float32)
     stds = stds.astype(np.float32)
@@ -175,14 +172,14 @@ def main():
     
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
-    new_A_wave = A_wave.clone()  # Use clone() instead of assignment
+    new_A_wave = A_wave.clone()
 
     split_line = int(X.shape[2] * 0.8)
 
-    train_original_data = X[:, :, :split_line]
-    new_train_original_data = train_original_data.copy()  # Make a copy
-    train_original_data = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
-    test_original_data = X[:, :, split_line:]
+    # CRITICAL FIX: Keep data NORMALIZED throughout
+    # X is already normalized from load_data_PEMS_BAY
+    train_original_data = X[:, :, :split_line]  # Already normalized
+    test_original_data = X[:, :, split_line:]    # Already normalized
 
     # Initialize global variables
     global retain_loader, forget_loader
@@ -196,20 +193,12 @@ def main():
         new_A_wave[args.node_idx, :] = 0
         new_A_wave[:, args.node_idx] = 0
         
-        # IMPORTANT: For node unlearning in retrain, we keep all nodes in the data
-        # but the adjacency matrix isolates the faulty node
-        # The model architecture should remain the same size
-        
-        # Create retain and forget loaders for node unlearning
-        # For node unlearning: use neighbor nodes as retain, faulty node as forget
-        
-        # Get neighbors of the faulty node (from original adjacency matrix)
+        # Get neighbors for retain/forget sets
         faulty_row = A_wave[args.node_idx].cpu().numpy()
         neighbor_indices = np.where(faulty_row > 0)[0]
         neighbor_indices = [idx for idx in neighbor_indices if idx != args.node_idx]
         
         if len(neighbor_indices) > 0:
-            # Use first few neighbors as retain set
             retain_node_idx = neighbor_indices[0]
             retain_data = train_original_data[retain_node_idx:retain_node_idx+1, :, :]
             retain_input, retain_target = generate_dataset(
@@ -218,7 +207,6 @@ def main():
             retain_dataset = TensorDataset(retain_input, retain_target)
             retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
         else:
-            # If no neighbors, use all nodes except faulty as retain
             print("Warning: Faulty node has no neighbors. Using all other nodes for retain set.")
             other_nodes = list(range(X.shape[0]))
             other_nodes.remove(args.node_idx)
@@ -238,22 +226,26 @@ def main():
         forget_dataset = TensorDataset(forget_input, forget_target)
         forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
         
+        # Use the normalized training data directly
+        new_train_original_data = train_original_data.copy()
+        
     else:
         print("UNLEARNING SUBSET...\n")
-        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(
-            train_original_data, forget_array, args.node_idx, 
+        # CRITICAL FIX: Denormalize for motif discovery, then re-normalize consistently
+        train_denorm = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
+        
+        new_train_denorm, forget_indices, retain_indices = fix_data_for_subset(
+            train_denorm, forget_array, args.node_idx, 
             num_timesteps_input, num_timesteps_output, 10
         )
         if forget_indices == []:
             print("NOT FIND SUBSET TO UNLEARN")
             return
 
-        means = np.mean(new_train_original_data, axis=(0, 2))
-        new_train_original_data = new_train_original_data - means.reshape(1, -1, 1)
-        stds = np.std(new_train_original_data, axis=(0, 2))
-        new_train_original_data = new_train_original_data / stds.reshape(1, -1, 1)
+        # CRITICAL FIX: Re-normalize using ORIGINAL means and stds
+        new_train_original_data = (new_train_denorm - means.reshape(1, -1, 1)) / stds.reshape(1, -1, 1)
     
-
+    # Generate datasets from normalized data
     training_input, training_target = generate_dataset(
         new_train_original_data,
         num_timesteps_input=num_timesteps_input,
@@ -267,10 +259,9 @@ def main():
     test_dataset = TensorDataset(test_input, test_target)
     test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
     
-    # CRITICAL FIX: Model should use the SAME number of nodes as original
-    # The adjacency matrix modification handles the unlearning
+    # Model uses same number of nodes as original
     new_model = STGCN(
-        A_wave.shape[0],  # Keep original number of nodes
+        A_wave.shape[0],
         training_input.shape[3],
         num_timesteps_input,
         num_timesteps_output, 
@@ -301,17 +292,14 @@ def main():
 
     print("\nEvaluating unlearned model...")
     
-    # CRITICAL FIX: Pass the correct adjacency matrices
-    # new_A_wave is used for the retrained model (with isolated node)
-    # A_wave is used for the original model (with all connections)
     evaluation_results = evaluate_unlearning(
         model_unlearned=new_model,
         model_original=original_model,
         retain_loader=retain_loader,
         forget_loader=forget_loader,
         test_loader=test_loader,
-        new_A_wave=new_A_wave,  # Modified adjacency for retrained model
-        A_wave=A_wave,           # Original adjacency for original model
+        new_A_wave=new_A_wave,
+        A_wave=A_wave,
         device=args.device,
         faulty_node_idx=args.node_idx
     )
@@ -333,7 +321,6 @@ if __name__ == "__main__":
     parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
     parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
     parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
-
 
     args = parser.parse_args()
     if args.unlearn_node:

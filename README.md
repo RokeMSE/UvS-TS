@@ -77,7 +77,7 @@ data_loader.py → stgcn.py → unlearn.py → evaluate.py
 
 - Unlearn: \
   + Subsection:
-`python src/unlearn.py --enable-cuda --input Data/PEMSBAY --model Data/Model --forget-set Data/forget_set.txt`
+`python src/unlearn.py --enable-cuda --input Data/PEMSBAY --model Data/Model --forget-set Data/forget_set.txt --node-idx 2`
   + Node:
 `python src/unlearn.py --enable-cuda --input Data/PEMSBAY --model Data/Model --unlearn-node --node-idx 2`
 

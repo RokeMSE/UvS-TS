@@ -21,15 +21,9 @@ from unlearning.t_gr import TemporalGenerativeReplay
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 # Import evaluation functions
-from evaluate import (
-    evaluate_unlearning, fidelity_score, forgetting_efficacy, 
-    generalization_score, statistical_distance, membership_inference_attack,
-    get_model_predictions
-)
+from evaluate import evaluate_unlearning
 import sys
 sys.path.append('src')
-
-
 
 class SATimeSeries:
     """Complete SA-TS Framework Integration"""
@@ -428,20 +422,19 @@ def main():
     sa_ts = SATimeSeries(model, A_wave, args.device)
     
     # Run unlearning on the training data portion
-    # TESTING FOR BEST PARAMETERS   
     if args.unlearn_node:
         history = sa_ts.unlearn_faulty_node(
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             top_k_node=2, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
         )
     else:
         history = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_array, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             threshold=10, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=2.0, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=512
         )
 
     if history == []:
@@ -467,15 +460,14 @@ def main():
         retain_loader=retain_loader,
         forget_loader=forget_loader,
         test_loader=test_loader,
+        new_A_wave=sa_ts.new_A_wave,
         A_wave=A_wave,
         device=args.device,
         faulty_node_idx=args.node_idx
     )
 
     # Save eval results
-    if not os.path.exists(args.model):
-        os.makedirs(args.model)
-    with open(args.model + "/unlearned_eval_results.txt", "w") as f:
+    with open(path + "/evaluation_results.txt", "w") as f:     
         for metric, value in evaluation_results.items():
             f.write(f"{metric}: {value:.4f}\n")
 

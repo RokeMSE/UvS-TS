@@ -20,11 +20,7 @@ from unlearning.tgr_test import TemporalGenerativeReplay, TGRConfig
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 # Import evaluation functions
-from evaluate import (
-    evaluate_unlearning, fidelity_score, forgetting_efficacy, 
-    generalization_score, statistical_distance, membership_inference_attack,
-    get_model_predictions
-)
+from evaluate import evaluate_unlearning
 import sys
 sys.path.append('src')
 
@@ -569,7 +565,7 @@ def main():
             num_timesteps_input, num_timesteps_output,
             test_loader,  # ADD THIS
             top_k_node=2, 
-            num_epochs=150,  # Increased
+            num_epochs=100,  # Increased
             learning_rate=5e-5,
             lambda_ewc=3.0,
             lambda_surrogate=1.0,
@@ -583,7 +579,7 @@ def main():
             num_timesteps_input, num_timesteps_output,
             test_loader,  # CRITICAL: Pass test_loader for calibration
             threshold=0.3, 
-            num_epochs=150,  # Increased from 100
+            num_epochs=100,  # Increased from 100
             learning_rate=5e-5,
             lambda_ewc=3.0,              # Reduced from 5.0
             lambda_surrogate=1.0,

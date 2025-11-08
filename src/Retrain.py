@@ -13,10 +13,9 @@ from tslearn.metrics import dtw
 from models.stgcn import STGCN
 from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
-# Import evaluation functions
 from evaluate import (
     evaluate_unlearning, fidelity_score, forgetting_efficacy, 
-    generalization_score, statistical_distance, membership_inference_attack,
+    generalization_score, statistical_distance,
     get_model_predictions
 )
 from train import train_epoch
@@ -25,7 +24,7 @@ sys.path.append('src')
 
 
 epochs = 100
-batch_size = 64
+batch_size = 512
 
 
 def fill_missing_with_node_mean(data):
@@ -53,7 +52,7 @@ def fill_missing_with_node_mean(data):
 
     return data_filled
 
-def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_timesteps_output, threshold):
+def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_timesteps_output, threshold, means, stds):
     new_dataset = dataset.copy()
     S = dataset[:, 1, :]
     u_mean, u_std = u.mean(), u.std() or 1.0
@@ -71,7 +70,6 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
                 forget_indices.append([i, i + window_size])
 
     retain_indices = []
-    # Handle case where no motifs are found
     if not forget_indices:
         print("Warning: No motifs found with the given threshold. Entire dataset is considered 'retain'.")
         retain_indices.append([0, time_step])
@@ -92,22 +90,27 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
     global forget_loader, retain_loader
     if not forget_indices:
         print("No forget samples found to unlearn. Skipping training.")
-        forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0))) # Empty dataloader
-        # Create a loader with all training data for retain_loader as nothing is forgotten
+        forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0)))
         training_input, training_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
         retain_loader = DataLoader(TensorDataset(training_input, training_target), batch_size=batch_size, shuffle=True)
     else:
-        forget_data = []
-        for item in forget_indices:
-            forget_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]]) 
+    # Normalize the data before generating datasets for the loaders
+        means_r = means.reshape(1, -1, 1)
+        stds_r = stds.reshape(1, -1, 1)
 
-        retain_data = []
+        forget_data_normalized = []
+        for item in forget_indices:
+            data_seg = dataset[faulty_node_idx:faulty_node_idx+1, :, item[0]:item[1]]
+            forget_data_normalized.append((data_seg - means_r) / stds_r)
+
+        retain_data_normalized = []
         for item in retain_indices:
-            retain_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]])
+            data_seg = dataset[faulty_node_idx:faulty_node_idx+1, :, item[0]:item[1]]
+            retain_data_normalized.append((data_seg - means_r) / stds_r)
 
         all_features_retain = []
         all_targets_retain = []
-        for item in retain_data:
+        for item in retain_data_normalized: # <-- Use the normalized list
             feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
             if feature.numel() > 0:
                 all_features_retain.append(feature)
@@ -124,7 +127,7 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
 
         all_features_forget = []
         all_targets_forget = []
-        for item in forget_data:
+        for item in forget_data_normalized: # <-- Use the normalized list
             feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
             if feature.numel() > 0:
                 all_features_forget.append(feature)
@@ -132,7 +135,7 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
         
         if not all_features_forget:
             print("No forget samples generated. Unlearning will not be performed.")
-            forget_loader = [] # Empty loader is ok, training will be skipped
+            forget_loader = []
         else:
             all_features_forget = torch.cat(all_features_forget, dim=0)
             all_targets_forget = torch.cat(all_targets_forget, dim=0)
@@ -140,15 +143,12 @@ def fix_data_for_subset(dataset, u, faulty_node_idx, num_timesteps_input, num_ti
             forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
 
     result = fill_missing_with_node_mean(new_dataset)
-
     return result, forget_indices, retain_indices
 
 def fix_data_for_node(A_wave, faulty_node_idx):
-
     new_A_wave = A_wave.copy()
     new_A_wave[faulty_node_idx, :] = 0
     new_A_wave[:, faulty_node_idx] = 0  
-
     return new_A_wave
 
 def main():
@@ -156,7 +156,7 @@ def main():
     # Load data
     print("Loading PEMS-BAY data...")
     A, X, means, stds = load_data_PEMS_BAY(args.input)
-    # N, F, T
+    # X is already normalized: (N, F, T)
     X = X.astype(np.float32)
     means = means.astype(np.float32)
     stds = stds.astype(np.float32)
@@ -177,55 +177,112 @@ def main():
     
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
-    new_A_wave = A_wave
+    new_A_wave = A_wave.clone()
 
     split_line = int(X.shape[2] * 0.8)
 
-    train_original_data = X[:, :, :split_line]
-    new_train_original_data = train_original_data
-    train_original_data = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
-    test_original_data = X[:, :, split_line:]
+    # CRITICAL FIX: Keep data NORMALIZED throughout
+    # X is already normalized from load_data_PEMS_BAY
+    train_original_data = X[:, :, :split_line]  # Already normalized
+    test_original_data = X[:, :, split_line:]    # Already normalized
+
+    # Initialize global variables
+    global retain_loader, forget_loader
+    retain_loader = None
+    forget_loader = None
 
     if args.unlearn_node:
         print("UNLEARNING NODE...\n")
-        new_A_wave = fix_data_for_node(A_wave, args.node_idx)
+        # Modify adjacency matrix
+        new_A_wave = A_wave.clone()
+        new_A_wave[args.node_idx, :] = 0
+        new_A_wave[:, args.node_idx] = 0
+        
+        # Get neighbors for retain/forget sets
+        faulty_row = A_wave[args.node_idx].cpu().numpy()
+        neighbor_indices = np.where(faulty_row > 0)[0]
+        neighbor_indices = [idx for idx in neighbor_indices if idx != args.node_idx]
+        
+        if len(neighbor_indices) > 0:
+            retain_node_idx = neighbor_indices[0]
+            retain_data = train_original_data[retain_node_idx:retain_node_idx+1, :, :]
+            retain_input, retain_target = generate_dataset(
+                retain_data, num_timesteps_input, num_timesteps_output
+            )
+            retain_dataset = TensorDataset(retain_input, retain_target)
+            retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
+        else:
+            print("Warning: Faulty node has no neighbors. Using all other nodes for retain set.")
+            other_nodes = list(range(X.shape[0]))
+            other_nodes.remove(args.node_idx)
+            retain_node_idx = other_nodes[0]
+            retain_data = train_original_data[retain_node_idx:retain_node_idx+1, :, :]
+            retain_input, retain_target = generate_dataset(
+                retain_data, num_timesteps_input, num_timesteps_output
+            )
+            retain_dataset = TensorDataset(retain_input, retain_target)
+            retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
+        
+        # Forget loader: data from the faulty node
+        forget_data = train_original_data[args.node_idx:args.node_idx+1, :, :]
+        forget_input, forget_target = generate_dataset(
+            forget_data, num_timesteps_input, num_timesteps_output
+        )
+        forget_dataset = TensorDataset(forget_input, forget_target)
+        forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
+        
+        # Use the normalized training data directly
+        new_train_original_data = train_original_data.copy()
         
     else:
         print("UNLEARNING SUBSET...\n")
-        new_train_original_data, forget_indices, retain_indices = fix_data_for_subset(train_original_data, forget_array, args.node_idx, 
-                                                                                      num_timesteps_input, num_timesteps_output, 10)
+        # CRITICAL FIX: Denormalize for motif discovery, then re-normalize consistently
+        train_denorm = train_original_data * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
+        
+        new_train_denorm, forget_indices, retain_indices = fix_data_for_subset(
+            train_denorm, forget_array, args.node_idx, 
+            num_timesteps_input, num_timesteps_output, 10,
+            means, stds
+        )
         if forget_indices == []:
             print("NOT FIND SUBSET TO UNLEARN")
             return
 
-        means = np.mean(new_train_original_data, axis=(0, 2))
-        new_train_original_data = new_train_original_data - means.reshape(1, -1, 1)
-        stds = np.std(new_train_original_data, axis=(0, 2))
-        new_train_original_data = new_train_original_data / stds.reshape(1, -1, 1)
+        # CRITICAL FIX: Re-normalize using ORIGINAL means and stds
+        new_train_original_data = (new_train_denorm - means.reshape(1, -1, 1)) / stds.reshape(1, -1, 1)
     
-
-    training_input, training_target = generate_dataset(new_train_original_data,
-                                                        num_timesteps_input=num_timesteps_input,
-                                                        num_timesteps_output=num_timesteps_output)
-    test_input, test_target = generate_dataset(test_original_data,
-                                                num_timesteps_input=num_timesteps_input,
-                                                num_timesteps_output=num_timesteps_output)
+    # Generate datasets from normalized data
+    training_input, training_target = generate_dataset(
+        new_train_original_data,
+        num_timesteps_input=num_timesteps_input,
+        num_timesteps_output=num_timesteps_output
+    )
+    test_input, test_target = generate_dataset(
+        test_original_data,
+        num_timesteps_input=num_timesteps_input,
+        num_timesteps_output=num_timesteps_output
+    )
     test_dataset = TensorDataset(test_input, test_target)
     test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
     
-    new_model = STGCN(new_A_wave.shape[0],
-                    training_input.shape[3],
-                    num_timesteps_input,
-                    num_timesteps_output, 
-                    num_features_output=3).to(device=args.device)
+    # Model uses same number of nodes as original
+    new_model = STGCN(
+        A_wave.shape[0],
+        training_input.shape[3],
+        num_timesteps_input,
+        num_timesteps_output, 
+        num_features_output=3
+    ).to(device=args.device)
 
     optimizer = torch.optim.Adam(new_model.parameters(), lr=1e-3)
     loss_criterion = nn.MSELoss()
 
     training_losses = []
     for epoch in range(epochs):
-        loss = train_epoch(new_model, new_A_wave, loss_criterion, optimizer ,training_input, training_target,
-                            batch_size=batch_size, device=args.device)
+        loss = train_epoch(
+            new_model, new_A_wave, loss_criterion, optimizer, training_input, training_target,
+            batch_size=batch_size, device=args.device
+        )
         training_losses.append(loss)
         print(f"Epoch {epoch} training loss: {format(training_losses[-1])}")
 
@@ -240,9 +297,10 @@ def main():
         os.makedirs(path)
 
     print("\nEvaluating unlearned model...")
+    
     evaluation_results = evaluate_unlearning(
         model_unlearned=new_model,
-        model_original=original_model, # Use the copy from the class
+        model_original=original_model,
         retain_loader=retain_loader,
         forget_loader=forget_loader,
         test_loader=test_loader,
@@ -255,6 +313,11 @@ def main():
     with open(path + "/retrain_eval_results.txt", "w") as f:
         for metric, value in evaluation_results.items():
             f.write(f"{metric}: {value:.4f}\n") 
+    
+    print("\n--- Evaluation Results ---")
+    for metric, value in evaluation_results.items():
+        print(f"{metric}: {value:.4f}")
+    print("--------------------------\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Unlearning')
@@ -265,20 +328,18 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
     parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
 
-
     args = parser.parse_args()
     if args.unlearn_node:
         if args.forget_set is not None:
-            print("Warning: --forget_set will be ignored when --unlearn-node is enabled.")
+            print("Warning: --forget-set will be ignored when --unlearn-node is enabled.")
     else:
         if args.forget_set is None:
-            parser.error("--forget_set is required unless --unlearn-node is specified.")
+            parser.error("--forget-set is required unless --unlearn-node is specified.")
 
     args.device = None
     if args.enable_cuda and torch.cuda.is_available():
         args.device = torch.device('cuda')
     else:
         args.device = torch.device('cpu')
-
 
     main()

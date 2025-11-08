@@ -1,0 +1,11 @@
+fidelity_score: 1.6095
+forgetting_efficacy: 0.5726
+generalization_score: 2.4463
+statistical_distance: 0.0703
+spatial_correlation_divergence: 0.1108
+temporal_pattern_divergence: 0.3292
+prediction_confidence: 1.1848
+forget_set_mse: 0.9416
+retain_set_mse: 1.2466
+test_set_mse: 0.2599
+graph_structure_impact: 4.5333

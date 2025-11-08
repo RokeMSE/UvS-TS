@@ -13,6 +13,7 @@ import argparse
 
 # Components
 from models.stgcn import STGCN
+from models.stgat import STGAT
 from utils.data_loader import load_data_PEMS_BAY
 from utils.data_utils import prepare_unlearning_data
 from unlearning.pa_ewc import PopulationAwareEWC
@@ -401,8 +402,11 @@ def main():
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
 
-    checkpoint = torch.load(args.model + "/model.pt", map_location=args.device)
-    model = STGCN(**checkpoint["config"]).to(args.device)
+    checkpoint = torch.load(args.model + f"/{args.type}_model.pt", map_location=args.device)
+    if args.type == 'stgcn':
+        model = STGCN(**checkpoint["config"]).to(args.device)
+    elif args.type == 'stgat':
+        model = STGAT(**checkpoint["config"]).to(args.device)
     model.load_state_dict({k: v.float() for k, v in checkpoint["model_state_dict"].items()})
     
     config = checkpoint["config"]
@@ -481,12 +485,12 @@ def main():
     print("--------------------------\n")
     
     # # Save results
-    # print("\nSaving results...")
-    # torch.save({
-    #     'model_state_dict': model.state_dict(),
-    #     'history': history,
-    #     'faulty_node_idx': args.node_idx
-    # }, args.model + "/unlearned_model.pt")
+    print("\nSaving results...")
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'history': history,
+        'faulty_node_idx': args.node_idx
+    }, args.model + f"/{args.type}_unlearned_model.pt")
     
     print("Unlearning completed!")
 
@@ -496,6 +500,7 @@ if __name__ == "__main__":
     parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
     parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
     parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
+    parser.add_argument('--type', type=str, required=True, help='Type of model')
     parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
     parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
 

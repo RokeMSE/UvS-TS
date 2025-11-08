@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from models.stgcn import STGCN
+from models.stgat import STGAT
 from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 
@@ -50,6 +51,8 @@ if __name__ == '__main__':
                         help='Enable CUDA')
     parser.add_argument('--input', type=str, required=True,
                         help='Path to the directory containing dataset')
+    parser.add_argument('--type', type=str, required=True,
+                        help='Type of model')
     parser.add_argument('--model', type=str, required=True,
                         help='Path to the directory containing weights of model')
 
@@ -82,11 +85,21 @@ if __name__ == '__main__':
     A_wave = torch.from_numpy(A_wave).float()
     A_wave = A_wave.to(device=args.device)
 
-    model = STGCN(A_wave.shape[0],
-                    training_input.shape[3],
-                    num_timesteps_input,
-                    num_timesteps_output, 
-                    num_features_output=3).to(device=args.device)
+    if args.type == 'stgcn':
+        model = STGCN(A_wave.shape[0],
+                        training_input.shape[3],
+                        num_timesteps_input,
+                        num_timesteps_output, 
+                        num_features_output=3)
+    elif args.type == 'stgat':
+        model = STGAT(A_wave.shape[0],
+                      training_input.shape[3],
+                      num_timesteps_input,
+                      num_timesteps_output, 
+                      nums_feature_output=3, 
+                      n_heads=8)
+    
+    model = model.to(device=args.device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_criterion = nn.MSELoss()
@@ -108,4 +121,4 @@ if __name__ == '__main__':
         "optimizer_state_dict": optimizer.state_dict(),
         "config": model.config
     }
-    torch.save(save_dict, path + "/model.pt")
+    torch.save(save_dict, path + f"/{args.type}_model.pt")

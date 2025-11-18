@@ -12,7 +12,7 @@ class TemporalGenerativeReplay:
     def __init__(self, model_type: str = "stgcn"): # Change the model type for different tests
         """
         Params:
-            model_type: Type of model ("stgcn", "rnn_vae", "diffusion")
+            model_type: Type of model ("stgcn", "", "")
         """
         self.model_type = model_type
         
@@ -127,7 +127,7 @@ class TemporalGenerativeReplay:
 
     def _denoise_step(self, x_t: torch.Tensor, noise_pred: torch.Tensor, 
                      t: int, num_steps: int) -> torch.Tensor:
-        """Single denoising step for diffusion model"""
+        """Single denoising step for  model"""
         # Simplified DDPM step
         beta_t = 0.0001 + (0.02 - 0.0001) * t / num_steps
         alpha_t = 1 - beta_t

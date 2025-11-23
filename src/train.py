@@ -12,7 +12,7 @@ num_timesteps_input = 12
 num_timesteps_output = 4
 
 epochs = 100
-batch_size = 512
+batch_size = 128
 
 def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size, device):
     """
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float()
     A_wave = A_wave.to(device=args.device)
-
+    print("Initialize model...")
     if args.type == 'stgcn':
         model = STGCN(A_wave.shape[0],
                         training_input.shape[3],
@@ -93,19 +93,18 @@ if __name__ == '__main__':
                         num_features_output=3)
     elif args.type == 'stgat':
         model = STGAT(A_wave.shape[0],
-                      training_input.shape[3],
                       num_timesteps_input,
                       num_timesteps_output, 
+                      training_input.shape[3],
                       nums_feature_output=3, 
                       n_heads=8)
-    
     model = model.to(device=args.device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_criterion = nn.MSELoss()
 
     training_losses = []
-
+    print("TRAINING...\n")
     for epoch in range(epochs):
         loss = train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target,
                             batch_size=batch_size, device=args.device)

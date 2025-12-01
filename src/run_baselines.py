@@ -23,8 +23,7 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
     train_data = X[:, :, :split_line]
     test_data = X[:, :, split_line:]
     
-    # Generate FULL datasets (B, N, T, F)
-    # We do NOT slice by node index here to avoid dimension mismatch in GNN models
+    # Generate datasets
     train_input, train_target = generate_dataset(
         train_data, num_timesteps_input, num_timesteps_output
     )
@@ -32,29 +31,43 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
         test_data, num_timesteps_input, num_timesteps_output
     )
     
-    new_A_wave = None
-    
+    # For node unlearning: use neighbor nodes for retain, faulty node for forget
     if args.unlearn_node:
         faulty_node_idx = args.node_idx
-        print(f"Preparing data for Node Unlearning: Node {faulty_node_idx}")
         
-        # Modify adjacency matrix for unlearning (isolate faulty node)
+        # Get neighbors
+        row = A[faulty_node_idx]
+        neighbor_indices = np.where(row > 0)[0]
+        neighbor_indices = [idx for idx in neighbor_indices if idx != faulty_node_idx]
+        
+        if len(neighbor_indices) == 0:
+            raise ValueError(f"Node {faulty_node_idx} has no neighbors!")
+        
+        # Retain: first neighbor's data
+        retain_node_idx = neighbor_indices[0]
+        retain_data = train_data[retain_node_idx:retain_node_idx+1, :, :]
+        retain_input, retain_target = generate_dataset(
+            retain_data, num_timesteps_input, num_timesteps_output
+        )
+        
+        # Forget: faulty node's data
+        forget_data = train_data[faulty_node_idx:faulty_node_idx+1, :, :]
+        forget_input, forget_target = generate_dataset(
+            forget_data, num_timesteps_input, num_timesteps_output
+        )
+        
+        # Modify adjacency matrix
         new_A = A.copy()
         new_A[faulty_node_idx, :] = 0
         new_A[:, faulty_node_idx] = 0
         new_A_wave = get_normalized_adj(new_A)
         new_A_wave = torch.from_numpy(new_A_wave).float()
         
-        # Retain Set = Train Set (Baseline methods will filter loss spatially)
-        retain_input, retain_target = train_input, train_target
-        
-        # Forget Set = Train Set (Baseline methods will filter loss spatially)
-        forget_input, forget_target = train_input, train_target
-        
     else:
-        # For subset unlearning (temporal split)
+        # For subset unlearning: use motif discovery (simplified version)
+        # For baseline comparison, we'll use random forget/retain split
         num_samples = train_input.shape[0]
-        forget_ratio = 0.1
+        forget_ratio = 0.1  # 10% forget
         
         indices = torch.randperm(num_samples)
         forget_size = int(num_samples * forget_ratio)
@@ -71,7 +84,7 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
         new_A_wave = torch.from_numpy(new_A_wave).float()
     
     # Create data loaders
-    batch_size = 512 # Change this depending on model type
+    batch_size = 512
     train_loader = DataLoader(
         TensorDataset(train_input, train_target), 
         batch_size=batch_size, shuffle=True
@@ -119,45 +132,36 @@ def run_baselines(args):
         map_location=args.device
     )
     
-    raw_config = checkpoint["config"]
-    
     if args.type == 'stgcn':
         model_class = STGCN
-        init_config = raw_config
     elif args.type == 'stgat':
         model_class = STGAT
-        init_config = {
-            "num_nodes": raw_config["num_nodes"],
-            "nums_step_in": raw_config["num_timesteps_input"],
-            "nums_step_out": raw_config["num_timesteps_output"],
-            "nums_feature_input": raw_config["num_features"],
-            "nums_feature_output": raw_config["num_features_output"],
-            "n_heads": raw_config.get("n_head", 8),
-            "dropout": raw_config.get("dropout", 0.0)
-        }
     else:
         raise ValueError(f"Unknown model type: {args.type}")
     
-    original_model = model_class(**init_config).to(args.device)
+    original_model = model_class(**checkpoint["config"]).to(args.device)
     original_model.load_state_dict({
         k: v.float() for k, v in checkpoint["model_state_dict"].items()
     })
     
-    num_timesteps_input = raw_config["num_timesteps_input"]
-    num_timesteps_output = raw_config["num_timesteps_output"]
+    config = checkpoint["config"]
+    num_timesteps_input = config["num_timesteps_input"]
+    num_timesteps_output = config["num_timesteps_output"]
     
+    # Prepare data loaders
     print("Preparing data loaders...")
     loaders = prepare_data_loaders(
         X, A, args, num_timesteps_input, num_timesteps_output
     )
     
+    # Initialize baseline runner
     baseline_runner = UnlearningBaselines(device=args.device)
     
+    # Storage for results
     all_results = {}
     all_models = {}
     
-    # Determine node to unlearn (if any)
-    faulty_node_idx = args.node_idx if args.unlearn_node else None
+    # ========== Run Each Baseline ==========
     
     # 1. Retrain from Scratch (Gold Standard)
     if args.run_retrain:
@@ -166,9 +170,8 @@ def run_baselines(args):
         print("="*80)
         try:
             retrained_model = baseline_runner.retrain_from_scratch(
-                model_class, init_config, loaders['retain_loader'], A_wave,
-                num_epochs=100, learning_rate=1e-3,
-                faulty_node_idx=faulty_node_idx
+                model_class, config, loaders['retain_loader'], A_wave,
+                num_epochs=100, learning_rate=1e-3
             )
             all_models['retrain'] = retrained_model
             
@@ -189,9 +192,8 @@ def run_baselines(args):
     print("="*80)
     try:
         finetuned_model, _ = baseline_runner.finetune_on_retain(
-            original_model, loaders['retain_loader'], loaders['new_A_wave'], # Use new_A_wave to simulate unlearning
-            num_epochs=50, learning_rate=1e-4,
-            faulty_node_idx=faulty_node_idx
+            original_model, loaders['retain_loader'], A_wave,
+            num_epochs=50, learning_rate=1e-4
         )
         all_models['finetune'] = finetuned_model
         
@@ -204,8 +206,6 @@ def run_baselines(args):
         print("Fine-tune completed")
     except Exception as e:
         print(f"Fine-tune failed: {e}")
-        import traceback
-        traceback.print_exc()
         all_results['finetune'] = None
     
     # 3. Gradient Ascent (NegGrad)
@@ -215,8 +215,7 @@ def run_baselines(args):
     try:
         neggrad_model, _ = baseline_runner.gradient_ascent(
             original_model, loaders['forget_loader'], A_wave,
-            num_epochs=20, learning_rate=1e-4,
-            faulty_node_idx=faulty_node_idx
+            num_epochs=20, learning_rate=1e-4
         )
         all_models['neggrad'] = neggrad_model
         
@@ -238,8 +237,7 @@ def run_baselines(args):
     try:
         neggrad_ft_model, _ = baseline_runner.gradient_ascent_plus_finetune(
             original_model, loaders['forget_loader'], loaders['retain_loader'], A_wave,
-            neggrad_epochs=20, finetune_epochs=30,
-            faulty_node_idx=faulty_node_idx
+            neggrad_epochs=20, finetune_epochs=30
         )
         all_models['neggrad_ft'] = neggrad_ft_model
         
@@ -260,8 +258,7 @@ def run_baselines(args):
     print("="*80)
     try:
         influence_model, _ = baseline_runner.influence_function_unlearning(
-            original_model, loaders['forget_loader'], loaders['train_loader'], A_wave,
-            faulty_node_idx=faulty_node_idx
+            original_model, loaders['forget_loader'], loaders['train_loader'], A_wave
         )
         all_models['influence'] = influence_model
         
@@ -283,8 +280,7 @@ def run_baselines(args):
     try:
         fisher_model, _ = baseline_runner.fisher_unlearning(
             original_model, loaders['forget_loader'], loaders['retain_loader'], A_wave,
-            num_epochs=50, lambda_fisher=10.0,
-            faulty_node_idx=faulty_node_idx
+            num_epochs=50, lambda_fisher=10.0
         )
         all_models['fisher'] = fisher_model
         
@@ -299,28 +295,33 @@ def run_baselines(args):
         print(f"Fisher Unlearning failed: {e}")
         all_results['fisher'] = None
     
+    # ========== Generate Comparison Report ==========
     print("\n" + "="*80)
     print("GENERATING COMPARISON REPORT")
     print("="*80)
     
     generate_comparison_report(all_results, args)
     
+    # Save models
     save_dir = os.path.join(args.model, f"baselines_node_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     
     for name, model in all_models.items():
         if model is not None:
-            model_config_to_save = getattr(model, 'config', raw_config)
             torch.save({
                 'model_state_dict': model.state_dict(),
-                'config': model_config_to_save
+                'config': config
             }, os.path.join(save_dir, f"{name}_model.pt"))
     
     print(f"\nResults saved to {save_dir}")
+    
     return all_results, all_models
 
 
 def generate_comparison_report(all_results, args):
+    """Generate a comprehensive comparison report"""
+    
+    # Create DataFrame for easy comparison
     metrics = [
         'fidelity_score', 'forgetting_efficacy', 'generalization_score',
         'forget_set_mse', 'retain_set_mse', 'test_set_mse',
@@ -337,29 +338,42 @@ def generate_comparison_report(all_results, args):
     
     df = pd.DataFrame(data)
     
+    # Print comparison table
     print("\n" + "="*80)
     print("BASELINE COMPARISON TABLE")
     print("="*80)
     print(df.to_string(index=False))
     
+    # Save to CSV
     save_dir = os.path.join(args.model, f"baselines_node_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     df.to_csv(os.path.join(save_dir, "baseline_comparison.csv"), index=False)
     
+    # Save detailed results to JSON
     with open(os.path.join(save_dir, "detailed_results.json"), 'w') as f:
         json.dump(all_results, f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x)
-
+    
+    # Print key insights
+    print("\n" + "="*80)
+    print("KEY INSIGHTS")
+    print("="*80)
+    
     if not df.empty:
-        # Check if columns exist before printing max/min
-        if 'forgetting_efficacy' in df.columns:
-            best_forget = df.loc[df['forgetting_efficacy'].idxmax()]
-            print(f"\nBest Forgetting Efficacy: {best_forget['Method']} ({best_forget['forgetting_efficacy']:.4f})")
-        if 'fidelity_score' in df.columns:
-            best_fidelity = df.loc[df['fidelity_score'].idxmax()]
-            print(f"Best Fidelity (Retain Performance): {best_fidelity['Method']} ({best_fidelity['fidelity_score']:.4f})")
-        if 'generalization_score' in df.columns:
-            best_gen = df.loc[df['generalization_score'].idxmax()]
-            print(f"Best Generalization: {best_gen['Method']} ({best_gen['generalization_score']:.4f})")
+        # Best forgetting efficacy
+        best_forget = df.loc[df['forgetting_efficacy'].idxmax()]
+        print(f"\nBest Forgetting Efficacy: {best_forget['Method']} ({best_forget['forgetting_efficacy']:.4f})")
+        
+        # Best fidelity
+        best_fidelity = df.loc[df['fidelity_score'].idxmax()]
+        print(f"Best Fidelity (Retain Performance): {best_fidelity['Method']} ({best_fidelity['fidelity_score']:.4f})")
+        
+        # Best generalization
+        best_gen = df.loc[df['generalization_score'].idxmax()]
+        print(f"Best Generalization: {best_gen['Method']} ({best_gen['generalization_score']:.4f})")
+        
+        # Lowest forget MSE
+        best_forget_mse = df.loc[df['forget_set_mse'].idxmax()]
+        print(f"Highest Forget MSE (Best Unlearning): {best_forget_mse['Method']} ({best_forget_mse['forget_set_mse']:.4f})")
 
 
 def main():
@@ -375,7 +389,8 @@ def main():
     args = parser.parse_args()
     args.device = torch.device('cuda' if args.enable_cuda and torch.cuda.is_available() else 'cpu')
     
-    run_baselines(args)
+    # Run all baselines
+    all_results, all_models = run_baselines(args)
     
     print("\n" + "="*80)
     print("BASELINE COMPARISON COMPLETED!")

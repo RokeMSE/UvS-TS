@@ -10,10 +10,15 @@ import os
 import copy
 import pickle
 import argparse
+import sqlite3 # USE THIS 
 
 # Components
-from models.stgcn import STGCN
-from models.stgat import STGAT
+from models import (
+    stgat,
+    stgcn,
+    stgatv2,
+    stsage
+)
 from utils.data_loader import load_data_PEMS_BAY
 from utils.data_utils import prepare_unlearning_data
 from unlearning.pa_ewc import PopulationAwareEWC
@@ -427,14 +432,14 @@ def main():
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             top_k_node=2, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
+            lambda_ewc=2.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
         )
     else:
         history = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_array, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             threshold=10, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=512
+            lambda_ewc=2.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=512
         )
 
     if history == []:

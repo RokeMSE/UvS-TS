@@ -10,6 +10,7 @@ import pandas as pd
 # Import models and utilities
 from models.stgcn import STGCN
 from models.stgat import STGAT
+from models.gwn import gwnet
 from utils.data_loader import load_data_PEMS_BAY
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 from evaluate import evaluate_unlearning
@@ -24,7 +25,6 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
     test_data = X[:, :, split_line:]
     
     # Generate FULL datasets (B, N, T, F)
-    # We do NOT slice by node index here to avoid dimension mismatch in GNN models
     train_input, train_target = generate_dataset(
         train_data, num_timesteps_input, num_timesteps_output
     )
@@ -45,10 +45,10 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
         new_A_wave = get_normalized_adj(new_A)
         new_A_wave = torch.from_numpy(new_A_wave).float()
         
-        # Retain Set = Train Set (Baseline methods will filter loss spatially)
+        # Retain Set = Train Set
         retain_input, retain_target = train_input, train_target
         
-        # Forget Set = Train Set (Baseline methods will filter loss spatially)
+        # Forget Set = Train Set
         forget_input, forget_target = train_input, train_target
         
     else:
@@ -71,7 +71,7 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
         new_A_wave = torch.from_numpy(new_A_wave).float()
     
     # Create data loaders
-    batch_size = 512 # Change this depending on model type
+    batch_size = 512  # Adjust based on model type if needed
     train_loader = DataLoader(
         TensorDataset(train_input, train_target), 
         batch_size=batch_size, shuffle=True
@@ -121,6 +121,7 @@ def run_baselines(args):
     
     raw_config = checkpoint["config"]
     
+    # Model initialization based on type
     if args.type == 'stgcn':
         model_class = STGCN
         init_config = raw_config
@@ -135,16 +136,36 @@ def run_baselines(args):
             "n_heads": raw_config.get("n_head", 8),
             "dropout": raw_config.get("dropout", 0.0)
         }
+    elif args.type == 'gwnet':
+        model_class = gwnet
+        # GWNet requires special initialization with supports
+        supports = [A_wave]
+        aptinit = supports[0]
+        init_config = {
+            "device": args.device,
+            "num_nodes": A_wave.shape[0],
+            "num_step_input": raw_config.get("num_timesteps_input", 12),
+            "num_step_output": raw_config.get("num_timesteps_output", 4),
+            "in_feature": raw_config.get("num_features", 3),
+            "out_feature": raw_config.get("num_features_output", 3),
+            "supports": supports,
+            "aptinit": aptinit
+        }
     else:
         raise ValueError(f"Unknown model type: {args.type}")
     
-    original_model = model_class(**init_config).to(args.device)
+    # Load model weights
+    if args.type == 'gwnet':
+        original_model = model_class(**init_config).to(args.device)
+    else:
+        original_model = model_class(**init_config).to(args.device)
+    
     original_model.load_state_dict({
         k: v.float() for k, v in checkpoint["model_state_dict"].items()
     })
     
-    num_timesteps_input = raw_config["num_timesteps_input"]
-    num_timesteps_output = raw_config["num_timesteps_output"]
+    num_timesteps_input = raw_config.get("num_timesteps_input", 12)
+    num_timesteps_output = raw_config.get("num_timesteps_output", 4)
     
     print("Preparing data loaders...")
     loaders = prepare_data_loaders(
@@ -181,6 +202,8 @@ def run_baselines(args):
             print("Retrain completed")
         except Exception as e:
             print(f"Retrain failed: {e}")
+            import traceback
+            traceback.print_exc()
             all_results['retrain'] = None
     
     # 2. Fine-tune on Retain Set
@@ -189,7 +212,7 @@ def run_baselines(args):
     print("="*80)
     try:
         finetuned_model, _ = baseline_runner.finetune_on_retain(
-            original_model, loaders['retain_loader'], loaders['new_A_wave'], # Use new_A_wave to simulate unlearning
+            original_model, loaders['retain_loader'], loaders['new_A_wave'],
             num_epochs=50, learning_rate=1e-4,
             faulty_node_idx=faulty_node_idx
         )
@@ -229,6 +252,8 @@ def run_baselines(args):
         print("NegGrad completed")
     except Exception as e:
         print(f"NegGrad failed: {e}")
+        import traceback
+        traceback.print_exc()
         all_results['neggrad'] = None
     
     # 4. Gradient Ascent + Fine-tune
@@ -252,6 +277,8 @@ def run_baselines(args):
         print("NegGrad+FT completed")
     except Exception as e:
         print(f"NegGrad+FT failed: {e}")
+        import traceback
+        traceback.print_exc()
         all_results['neggrad_ft'] = None
     
     # 5. Influence Functions
@@ -274,6 +301,8 @@ def run_baselines(args):
         print("Influence Functions completed")
     except Exception as e:
         print(f"Influence Functions failed: {e}")
+        import traceback
+        traceback.print_exc()
         all_results['influence'] = None
     
     # 6. Fisher Unlearning
@@ -297,6 +326,8 @@ def run_baselines(args):
         print("Fisher Unlearning completed")
     except Exception as e:
         print(f"Fisher Unlearning failed: {e}")
+        import traceback
+        traceback.print_exc()
         all_results['fisher'] = None
     
     print("\n" + "="*80)
@@ -350,7 +381,6 @@ def generate_comparison_report(all_results, args):
         json.dump(all_results, f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x)
 
     if not df.empty:
-        # Check if columns exist before printing max/min
         if 'forgetting_efficacy' in df.columns:
             best_forget = df.loc[df['forgetting_efficacy'].idxmax()]
             print(f"\nBest Forgetting Efficacy: {best_forget['Method']} ({best_forget['forgetting_efficacy']:.4f})")
@@ -368,7 +398,8 @@ def main():
     parser.add_argument('--unlearn-node', action='store_true', help='Node unlearning mode')
     parser.add_argument('--node-idx', type=int, required=True, help='Node index to unlearn')
     parser.add_argument('--input', type=str, required=True, help='Data directory')
-    parser.add_argument('--type', type=str, default='stgcn', choices=['stgcn', 'stgat'], help='Model type')
+    parser.add_argument('--type', type=str, default='stgcn', 
+                        choices=['stgcn', 'stgat', 'gwnet'], help='Model type')
     parser.add_argument('--model', type=str, required=True, help='Model directory')
     parser.add_argument('--run-retrain', action='store_true', help='Run retrain baseline (slow)')
     

@@ -4,7 +4,7 @@ from torch_geometric.nn import GATConv
 import torch.nn as nn
 
 class STGAT(torch.nn.Module):
-    def __init__(self, num_nodes, nums_step_in, nums_step_out, nums_feature_input, nums_feature_output, n_heads=8, dropout=0.0):
+    def __init__(self, nums_node, nums_step_in, nums_step_out, nums_feature_in, nums_feature_out, n_heads=8, dropout=0.0):
         """
         Initialize the ST-GAT model
         :param in_channels Number of input channels
@@ -17,22 +17,23 @@ class STGAT(torch.nn.Module):
         self.num_timesteps_output = nums_step_out
         self.heads = n_heads
         self.dropout = dropout
-        self.n_nodes = num_nodes
+        self.n_nodes = nums_node
         self.edge_index = None
         self.n_preds = 9
         self.hidden_dim = 32
 
         self.config = {
-            "num_nodes": num_nodes,
-            "num_features": nums_feature_input,
-            "num_timesteps_input": nums_step_in,
-            "num_timesteps_output": nums_step_out,
-            "num_features_output": nums_feature_output,
-            "n_head": n_heads
+            "nums_node": nums_node,
+            "nums_feature_in": nums_feature_in,
+            "nums_step_in": nums_step_in,
+            "nums_step_out": nums_step_out,
+            "nums_feature_out": nums_feature_out,
+            "n_head": n_heads,
+            "dropout": dropout,
         }
 
         # single graph attentional layer with 8 attention heads
-        self.gat = GATConv(in_channels=nums_feature_input, out_channels=self.hidden_dim,
+        self.gat = GATConv(in_channels=nums_feature_in, out_channels=self.hidden_dim,
             heads=n_heads, dropout=0, concat=False)
         
         self.lstm = nn.LSTM(
@@ -41,7 +42,7 @@ class STGAT(torch.nn.Module):
             num_layers=2,     # 2 layers LSTM
             batch_first=True
         )
-        self.fc = nn.Linear(self.hidden_dim, nums_feature_output * nums_step_out)
+        self.fc = nn.Linear(self.hidden_dim, nums_feature_out * nums_step_out)
 
     def process(self, W):
         edge_index = torch.nonzero(W, as_tuple=False).t() #(2, num_edges)

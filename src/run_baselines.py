@@ -17,19 +17,20 @@ from evaluate import evaluate_unlearning
 from unlearning_baselines import UnlearningBaselines
 
 
-def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
+def prepare_data_loaders(train, test, A, args, num_timesteps_input, num_timesteps_output, forget_set=None):
     """Prepare all necessary data loaders for unlearning experiments"""
-    
-    split_line = int(X.shape[2] * 0.8)
-    train_data = X[:, :, :split_line]
-    test_data = X[:, :, split_line:]
+
     
     # Generate FULL datasets (B, N, T, F)
     train_input, train_target = generate_dataset(
-        train_data, num_timesteps_input, num_timesteps_output
+        train, num_timesteps_input, num_timesteps_output
     )
+    nums_window = train_input.shape[0]
+    window_starts = torch.arange(nums_window)
+    window_ends = window_starts + num_timesteps_input + num_timesteps_output - 1
+
     test_input, test_target = generate_dataset(
-        test_data, num_timesteps_input, num_timesteps_output
+        test, num_timesteps_input, num_timesteps_output
     )
     
     new_A_wave = None
@@ -46,26 +47,34 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
         new_A_wave = torch.from_numpy(new_A_wave).float()
         
         # Retain Set = Train Set
-        retain_input, retain_target = train_input, train_target
-        
-        # Forget Set = Train Set
-        forget_input, forget_target = train_input, train_target
-        
+        forget_input = train_input[:, faulty_node_idx:faulty_node_idx+1, :, :]
+        forget_target = train_target[:, faulty_node_idx:faulty_node_idx+1, :, :]    
+
+        # --- Retain set = mask faulty node ---
+        retain_input = train_input.clone()
+        retain_target = train_target.clone()
+
+        retain_input[:, faulty_node_idx, :, :] = 0
+        retain_target[:, faulty_node_idx, :, :] = 0
+
     else:
         # For subset unlearning (temporal split)
-        num_samples = train_input.shape[0]
-        forget_ratio = 0.1
-        
-        indices = torch.randperm(num_samples)
-        forget_size = int(num_samples * forget_ratio)
-        
-        forget_indices = indices[:forget_size]
-        retain_indices = indices[forget_size:]
-        
-        forget_input = train_input[forget_indices]
-        forget_target = train_target[forget_indices]
-        retain_input = train_input[retain_indices]
-        retain_target = train_target[retain_indices]
+        mask_forget = torch.zeros(nums_window, dtype=torch.bool)
+        for key, value in forget_set.items():
+            for item in value:
+                start = item[0]
+                end = item[1]
+                overlap = ~((window_ends < start) | (window_starts > end))
+                mask_forget |= overlap
+
+        Df_indices = torch.where(mask_forget)[0]
+        Dr_indices = torch.where(~mask_forget)[0]
+
+        retain_input = train_input[Dr_indices]
+        retain_target = train_target[Dr_indices]
+
+        forget_input = train_input[Df_indices]
+        forget_target = train_target[Df_indices]
         
         new_A_wave = get_normalized_adj(A)
         new_A_wave = torch.from_numpy(new_A_wave).float()
@@ -98,80 +107,8 @@ def prepare_data_loaders(X, A, args, num_timesteps_input, num_timesteps_output):
     }
 
 
-def run_baselines(args):
+def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave):
     """Run all baseline methods and compare results"""
-    
-    print("="*80)
-    print("UNLEARNING BASELINE COMPARISON")
-    print("="*80)
-    
-    # Load data
-    print("\nLoading data...")
-    A, X, means, stds = load_data_PEMS_BAY(args.input)
-    X = X.astype(np.float32)
-    A_wave = get_normalized_adj(A)
-    A_wave = torch.from_numpy(A_wave).float().to(args.device)
-    
-    # Load original model
-    print("Loading original model...")
-    checkpoint = torch.load(
-        os.path.join(args.model, f"{args.type}_model.pt"),
-        map_location=args.device
-    )
-    
-    raw_config = checkpoint["config"]
-    
-    # Model initialization based on type
-    if args.type == 'stgcn':
-        model_class = STGCN
-        init_config = raw_config
-    elif args.type == 'stgat':
-        model_class = STGAT
-        init_config = {
-            "num_nodes": raw_config["num_nodes"],
-            "nums_step_in": raw_config["num_timesteps_input"],
-            "nums_step_out": raw_config["num_timesteps_output"],
-            "nums_feature_input": raw_config["num_features"],
-            "nums_feature_output": raw_config["num_features_output"],
-            "n_heads": raw_config.get("n_head", 8),
-            "dropout": raw_config.get("dropout", 0.0)
-        }
-    elif args.type == 'gwnet':
-        model_class = gwnet
-        # GWNet requires special initialization with supports
-        supports = [A_wave]
-        aptinit = supports[0]
-        init_config = {
-            "device": args.device,
-            "num_nodes": A_wave.shape[0],
-            "num_step_input": raw_config.get("num_timesteps_input", 12),
-            "num_step_output": raw_config.get("num_timesteps_output", 4),
-            "in_feature": raw_config.get("num_features", 3),
-            "out_feature": raw_config.get("num_features_output", 3),
-            "supports": supports,
-            "aptinit": aptinit
-        }
-    else:
-        raise ValueError(f"Unknown model type: {args.type}")
-    
-    # Load model weights
-    if args.type == 'gwnet':
-        original_model = model_class(**init_config).to(args.device)
-    else:
-        original_model = model_class(**init_config).to(args.device)
-    
-    original_model.load_state_dict({
-        k: v.float() for k, v in checkpoint["model_state_dict"].items()
-    })
-    
-    num_timesteps_input = raw_config.get("num_timesteps_input", 12)
-    num_timesteps_output = raw_config.get("num_timesteps_output", 4)
-    
-    print("Preparing data loaders...")
-    loaders = prepare_data_loaders(
-        X, A, args, num_timesteps_input, num_timesteps_output
-    )
-    
     baseline_runner = UnlearningBaselines(device=args.device)
     
     all_results = {}
@@ -187,7 +124,7 @@ def run_baselines(args):
         print("="*80)
         try:
             retrained_model = baseline_runner.retrain_from_scratch(
-                model_class, init_config, loaders['retain_loader'], A_wave,
+                model_class, raw_config, loaders['retain_loader'], A_wave,
                 num_epochs=100, learning_rate=1e-3,
                 faulty_node_idx=faulty_node_idx
             )
@@ -396,17 +333,63 @@ def main():
     parser = argparse.ArgumentParser(description='Run Unlearning Baselines')
     parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
     parser.add_argument('--unlearn-node', action='store_true', help='Node unlearning mode')
-    parser.add_argument('--node-idx', type=int, required=True, help='Node index to unlearn')
+    parser.add_argument('--node-idx', type=int, help='Node index to unlearn')
     parser.add_argument('--input', type=str, required=True, help='Data directory')
     parser.add_argument('--type', type=str, default='stgcn', 
                         choices=['stgcn', 'stgat', 'gwnet'], help='Model type')
     parser.add_argument('--model', type=str, required=True, help='Model directory')
     parser.add_argument('--run-retrain', action='store_true', help='Run retrain baseline (slow)')
+    parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
     
     args = parser.parse_args()
     args.device = torch.device('cuda' if args.enable_cuda and torch.cuda.is_available() else 'cpu')
+
+    print("="*80)
+    print("UNLEARNING BASELINE COMPARISON")
+    print("="*80)
     
-    run_baselines(args)
+    # Load data
+    print("\nLoading data...")
+    A, train_original_data, test_original_data, means, stds = load_data_PEMS_BAY(args.input)
+    
+    # Load original model
+    print("Loading original model...")
+    checkpoint = torch.load(
+        os.path.join(args.model, f"{args.type}_model.pt"),
+        map_location=args.device
+    )
+    
+    raw_config = checkpoint["config"]
+    
+    if args.type == 'stgcn':
+        model_class = STGCN
+    elif args.type == 'stgat':
+        model_class = STGAT
+    elif args.type == 'gwnet':
+        model_class = gwnet
+    else:
+        raise ValueError(f"Unknown model type: {args.type}")
+
+    original_model = model_class(**raw_config).to(args.device)
+
+    original_model.load_state_dict({
+        k: v.float() for k, v in checkpoint["model_state_dict"].items()
+    })
+    
+    num_timesteps_input = raw_config.get("nums_timestep_in", 12)
+    num_timesteps_output = raw_config.get("nums_step_out", 4)
+    
+    # Read forget_set
+    with open(args.forget_set, 'r', encoding='utf8') as f:
+        forget_set_json = json.load(f)
+        
+    
+    print("Preparing data loaders...")
+    loaders = prepare_data_loaders(
+        train_original_data, test_original_data, A, args, num_timesteps_input, num_timesteps_output, forget_set_json
+    )
+    
+    run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'])
     
     print("\n" + "="*80)
     print("BASELINE COMPARISON COMPLETED!")

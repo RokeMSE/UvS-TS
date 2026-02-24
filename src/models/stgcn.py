@@ -64,8 +64,7 @@ class STGCN(nn.Module):
     num_features).
     """
 
-    def __init__(self, num_nodes, num_features, num_timesteps_input,
-                 num_timesteps_output, num_features_output=3):
+    def __init__(self, nums_node, nums_step_in, nums_step_out, nums_feature_in, nums_feature_out):
         """
         :param num_nodes: Number of nodes in the graph.
         :param num_features: Number of features at each node in each time step (input features).
@@ -74,30 +73,30 @@ class STGCN(nn.Module):
         :param num_features_output: Number of features to predict per output timestep.
         """
         super(STGCN, self).__init__()
-        self.block1 = STGCNBlock(in_channels=num_features, out_channels=64,
-                                 spatial_channels=16, num_nodes=num_nodes)
+        self.block1 = STGCNBlock(in_channels=nums_feature_in, out_channels=64,
+                                 spatial_channels=16, num_nodes=nums_node)
         self.block2 = STGCNBlock(in_channels=64, out_channels=64,
-                                 spatial_channels=16, num_nodes=num_nodes)
+                                 spatial_channels=16, num_nodes=nums_node)
         self.last_temporal = TimeBlock(in_channels=64, out_channels=64)
 
         # number of values per node after temporal blocks (flatten length)
         # Keep the original reduction formula but you can adjust if kernel sizes differ.
-        reduced_time_steps = (num_timesteps_input - 2 * 5)  # keep same heuristic as original code
+        reduced_time_steps = (nums_step_in - 2 * 5)  # keep same heuristic as original code
         if reduced_time_steps <= 0:
             raise ValueError("num_timesteps_input too small for the temporal reductions used in the network.")
 
         # Map flattened per-node features to (T_out * features_out)
-        self.num_timesteps_output = num_timesteps_output
-        self.num_features_output = num_features_output
+        self.num_timesteps_output = nums_step_out
+        self.num_features_output = nums_feature_out
         self.fully = nn.Linear(reduced_time_steps * 64,
-                               num_timesteps_output * num_features_output)
+                               nums_step_out * nums_feature_out)
 
         self.config = {
-            "num_nodes": num_nodes,
-            "num_features": num_features,
-            "num_timesteps_input": num_timesteps_input,
-            "num_timesteps_output": num_timesteps_output,
-            "num_features_output": num_features_output
+            "nums_node": nums_node,
+            "nums_feature_in": nums_feature_in,
+            "nums_step_in": nums_step_in,
+            "nums_step_out": nums_step_out,
+            "nums_feature_out": nums_feature_out
         }
 
     def forward(self, A_hat, X):

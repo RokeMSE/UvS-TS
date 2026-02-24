@@ -47,10 +47,10 @@ class gcn(nn.Module):
 
 
 class gwnet(nn.Module):
-    def __init__(self, device, num_nodes, num_step_input=4, num_step_output=12, in_feature=3, out_feature=3, dropout=0.3, supports=None, gcn_bool=True, addaptadj=True, aptinit=None,residual_channels=32,dilation_channels=32,skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
+    def __init__(self, nums_node, nums_step_in, nums_step_out, nums_feature_in, nums_feature_out, device, dropout=0.3, supports=None, gcn_bool=True, addaptadj=True, aptinit=None,residual_channels=32,dilation_channels=32,skip_channels=256,end_channels=512,kernel_size=2,blocks=4,layers=2):
         super(gwnet, self).__init__()
-        self.num_timesteps_output = num_step_output
-        self.num_features_output = out_feature
+        self.num_timesteps_output = nums_step_out
+        self.num_features_output = nums_feature_out
 
         self.dropout = dropout
         self.blocks = blocks
@@ -64,8 +64,28 @@ class gwnet(nn.Module):
         self.skip_convs = nn.ModuleList()
         self.bn = nn.ModuleList()
         self.gconv = nn.ModuleList()
+        self.config = {
+            "nums_node": nums_node,
+            "nums_feature_in": nums_feature_in,
+            "nums_step_in": nums_step_in,
+            "nums_step_out": nums_step_out,
+            "nums_feature_out": nums_feature_out,
+            "dropout": dropout,
+            "supports": supports, 
+            "gcn_bool": gcn_bool,
+            "addaptadj": addaptadj, 
+            "aptinit": aptinit,
+            "residual_channels": residual_channels,
+            "dilation_channels": dilation_channels,
+            "skip_channels": skip_channels,
+            "end_channels": end_channels,
+            "kernel_size": kernel_size,
+            "blocks": blocks,
+            "layers": layers
 
-        self.start_conv = nn.Conv2d(in_channels=in_feature,
+        }
+
+        self.start_conv = nn.Conv2d(in_channels=nums_feature_in,
                                     out_channels=residual_channels,
                                     kernel_size=(1,1))
         self.supports = supports
@@ -80,8 +100,8 @@ class gwnet(nn.Module):
             if aptinit is None:
                 if supports is None:
                     self.supports = []
-                self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 10).to(device), requires_grad=True).to(device)
-                self.nodevec2 = nn.Parameter(torch.randn(10, num_nodes).to(device), requires_grad=True).to(device)
+                self.nodevec1 = nn.Parameter(torch.randn(nums_node, 10).to(device), requires_grad=True).to(device)
+                self.nodevec2 = nn.Parameter(torch.randn(10, nums_node).to(device), requires_grad=True).to(device)
                 self.supports_len +=1
             else:
                 if supports is None:
@@ -92,8 +112,6 @@ class gwnet(nn.Module):
                 self.nodevec1 = nn.Parameter(initemb1, requires_grad=True).to(device)
                 self.nodevec2 = nn.Parameter(initemb2, requires_grad=True).to(device)
                 self.supports_len += 1
-
-
 
 
         for b in range(blocks):
@@ -133,7 +151,7 @@ class gwnet(nn.Module):
                                   bias=True)
 
         self.end_conv_2 = nn.Conv2d(in_channels=end_channels,
-                                    out_channels=num_step_output * out_feature,
+                                    out_channels=nums_step_out * nums_feature_out,
                                     kernel_size=(1,1),
                                     bias=True)
 

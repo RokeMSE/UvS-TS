@@ -10,7 +10,7 @@ import os
 import copy
 import pickle
 import argparse
-
+import json
 # Components
 from models.stgcn import STGCN
 from models.stgat import STGAT
@@ -51,7 +51,7 @@ class SATimeSeries:
         self.fim_diagonal = None
         
     def unlearn_faulty_subset(self, dataset, forget_ex, faulty_node_idx, A_wave, means, stds, 
-                           num_timesteps_input, num_timesteps_output, threshold=0.3,
+                           num_timesteps_input, num_timesteps_output, threshold=0.1,
                            num_epochs=50, learning_rate=5e-5, 
                            lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512):
         """
@@ -61,6 +61,10 @@ class SATimeSeries:
         
         # Ensure dataset is float32
         dataset = dataset.astype(np.float32)
+        train_input, train_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
+        nums_window = train_input.shape[0]
+        window_starts = torch.arange(nums_window)
+        window_ends = window_starts + num_timesteps_input + num_timesteps_output - 1
         forget_ex = forget_ex.astype(np.float32)
         
         # --- Partition data
@@ -68,6 +72,7 @@ class SATimeSeries:
             dataset, forget_ex, faulty_node_idx, threshold
         )
         print(f"Forget samples: {len(forget_indices)}, Retain samples: {len(retain_indices)}")
+        print(forget_indices)
         
         global forget_loader, retain_loader
 
@@ -75,8 +80,7 @@ class SATimeSeries:
             print("No forget samples found to unlearn. Skipping training.")
             forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0))) # Empty dataloader
             # Create a loader with all training data for retain_loader as nothing is forgotten
-            training_input, training_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
-            retain_loader = DataLoader(TensorDataset(training_input, training_target), batch_size=batch_size, shuffle=True)
+            retain_loader = DataLoader(TensorDataset(train_input, train_target), batch_size=batch_size, shuffle=True)
             return {'total_loss': [], 'surrogate_loss': [], 'ewc_penalty': [], 'retain_loss': []}
 
         forget_data = []
@@ -134,6 +138,7 @@ class SATimeSeries:
             forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output,
             self.device, A_wave
         )
+
         surrogate_features, surrogate_targets = [], []
         for item in surrogate_data:
             if isinstance(item, torch.Tensor):
@@ -175,11 +180,12 @@ class SATimeSeries:
                         lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512):
         
         dataset = dataset.astype(np.float32)
+        threshold = 1e-6
 
         # Get real neighbour node
         row = A_wave[faulty_node_idx].clone().flatten()
         row[faulty_node_idx] = float('-inf')  # remove self-loop
-        out_mask = row != 0
+        out_mask = row.abs() > threshold
         out_indices = torch.nonzero(out_mask, as_tuple=False).squeeze()
         out_values = row[out_mask]
         if out_values.numel() > 0:
@@ -190,7 +196,7 @@ class SATimeSeries:
 
         col = A_wave[:, faulty_node_idx].clone().flatten()
         col[faulty_node_idx] = float('-inf')
-        in_mask = col != 0
+        in_mask = col.abs() > threshold
         in_indices = torch.nonzero(in_mask, as_tuple=False).squeeze()
         in_values = col[in_mask]
         if in_values.numel() > 0:
@@ -258,12 +264,14 @@ class SATimeSeries:
         for item in surrogate_data:
             if isinstance(item, torch.Tensor):
                 item = item.cpu().numpy()
+                
             item = item.astype(np.float32)
             feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
             feature = feature.float() if isinstance(feature, torch.Tensor) else torch.from_numpy(feature).float()
             target = target.float() if isinstance(target, torch.Tensor) else torch.from_numpy(target).float()
             surrogate_features.append(feature)
             surrogate_targets.append(target)
+
         surrogate_features = torch.cat(surrogate_features, dim=0)
         surrogate_targets = torch.cat(surrogate_targets, dim=0)
         surrogate_dataset = TensorDataset(surrogate_features, surrogate_targets)
@@ -345,6 +353,9 @@ class SATimeSeries:
         retain_target = retain_target.float().to(self.device)
         A_wave = A_wave.float().to(self.device)
 
+        # print("FEATURE: ", surrogate_features.shape)
+        # print("A_WAVE: ", A_wave.shape)
+
         # Forward passes
         surrogate_pred = self.model(A_wave, surrogate_features)
         retain_pred = self.model(A_wave, retain_features)
@@ -380,18 +391,24 @@ def main():
     torch.cuda.empty_cache()
     # Load data
     print("Loading PEMS-BAY data...")
-    A, X, means, stds = load_data_PEMS_BAY(args.input)
+    A, train_original_data, test_original_data, means, stds = load_data_PEMS_BAY(args.input)
     # N, F, T
-    X = X.astype(np.float32)
     means = means.astype(np.float32)
     stds = stds.astype(np.float32)
-
+    forget_array = []
     if args.forget_set and not args.unlearn_node:
-        with open(args.forget_set, "r") as f:
-            content = f.read().strip()
-            values = content.split(",")
-            forget_array = np.array([float(v) for v in values], dtype=np.float32)
-        forget_array = (forget_array - means[1]) / stds[1]
+        with open(args.forget_set, 'r', encoding='utf8') as f:
+            forget_set_json = json.load(f)
+        for key, value in forget_set_json.items():
+            # Only 1 element(subset on 1 node)
+            node_idx = int(key)
+            for item in value:
+                forget_set = train_original_data[node_idx, 1, item[0]:item[1]]
+                # forget_set = (forget_set - means[1]) / stds[1]
+                # forget_array.append(forget_set - means[1]) / stds[1]
+
+            args.node_idx = node_idx
+            break
     
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
@@ -404,13 +421,10 @@ def main():
     model.load_state_dict({k: v.float() for k, v in checkpoint["model_state_dict"].items()})
     
     config = checkpoint["config"]
-    num_timesteps_input = config["num_timesteps_input"]
-    num_timesteps_output = config["num_timesteps_output"]
+    num_timesteps_input = config["nums_step_in"]
+    num_timesteps_output = config["nums_step_out"]
 
     # --- Create a test loader for evaluation ---
-    split_line = int(X.shape[2] * 0.8)
-    train_original_data = X[:, :, :split_line]
-    test_original_data = X[:, :, split_line:]
 
     test_input, test_target = generate_dataset(test_original_data,
                                                 num_timesteps_input=num_timesteps_input,
@@ -431,9 +445,9 @@ def main():
         )
     else:
         history = sa_ts.unlearn_faulty_subset(
-            train_original_data, forget_array, args.node_idx, A_wave, means, stds,
+            train_original_data, forget_set, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
-            threshold=10, num_epochs=100, learning_rate=1e-5,
+            threshold=0.5, num_epochs=100, learning_rate=1e-5,
             lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=512
         )
 
@@ -490,7 +504,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Unlearning')
     parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
     parser.add_argument('--unlearn-node', action='store_true', help='Enable unlearn node')
-    parser.add_argument('--node-idx', type=int, required=True, help='Node index need to be unlearned')
+    parser.add_argument('--node-idx', type=int, help='Node index need to be unlearned')
     parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
     parser.add_argument('--type', type=str, required=True, help='Type of model')
     parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')

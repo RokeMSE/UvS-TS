@@ -4,8 +4,23 @@ import numpy as np
 
 def load_data_PEMS_BAY(file_path):
 
-    X = np.load(file_path + "/PEMSBAY.npy").transpose((1, 2, 0))
+    test = np.load(file_path + "/test.npy").transpose((1, 2, 0))
     # (N, F, T)
+    test = test.astype(np.double)
+    # Normalization using Z-score method
+    means = np.mean(test, axis=(0, 2))
+    test = test - means.reshape(1, -1, 1)
+    stds = np.std(test, axis=(0, 2))
+    test = test / stds.reshape(1, -1, 1)
+
+    train = np.load(file_path + "/train.npy").transpose((1, 2, 0))
+    # (N, F, T)
+    train = train.astype(np.double)
+    # Normalization using Z-score method
+    means = np.mean(train, axis=(0, 2))
+    train = train - means.reshape(1, -1, 1)
+    stds = np.std(train, axis=(0, 2))
+    train = train / stds.reshape(1, -1, 1)
 
     try:
         with open(file_path + "/adj_mx_bay.pkl", 'rb') as f:
@@ -17,12 +32,5 @@ def load_data_PEMS_BAY(file_path):
         print('Unable to load data ', file_path + "/adj_mx_bay.pkl", ':', e)
         raise
 
-    X = X.astype(np.double)
+    return A, train, test, means, stds
 
-    # Normalization using Z-score method
-    means = np.mean(X, axis=(0, 2))
-    X = X - means.reshape(1, -1, 1)
-    stds = np.std(X, axis=(0, 2))
-    X = X / stds.reshape(1, -1, 1)
-
-    return A, X, means, stds

@@ -366,7 +366,7 @@ def generate_comparison_report(all_results, args):
     
     save_dir = os.path.join(args.model, f"baselines_node_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
-    df.to_csv(os.path.join(save_dir, "baseline_comparison.csv"), index=False)
+    df.to_csv(os.path.join(save_dir, f"{args.type}_baseline_comparison.csv"), index=False)
     
     with open(os.path.join(save_dir, "detailed_results.json"), 'w') as f:
         json.dump(all_results, f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else x)

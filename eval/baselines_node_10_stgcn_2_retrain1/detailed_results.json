@@ -1,0 +1,80 @@
+{
+  "retrain": {
+    "fidelity_score": 4.103076568623695,
+    "forgetting_efficacy": 0.24364942099038528,
+    "generalization_score": 1.0939177570040934,
+    "statistical_distance": 0.004013538360595703,
+    "spatial_correlation_divergence": 0.12272398799594339,
+    "temporal_pattern_divergence": 0.27159059908846084,
+    "prediction_confidence": 1.3344430923461914,
+    "forget_set_mse": 0.3611413240432739,
+    "retain_set_mse": 0.361139714717865,
+    "test_set_mse": 0.10044819861650467,
+    "graph_structure_impact": 1.0212060614636618
+  },
+  "finetune": {
+    "fidelity_score": 3.949919447098634,
+    "forgetting_efficacy": 0.2541537563401169,
+    "generalization_score": 1.0305435853752212,
+    "statistical_distance": 9.99999993922529e-09,
+    "spatial_correlation_divergence": 0.06173159155495343,
+    "temporal_pattern_divergence": 0.1054619325041185,
+    "prediction_confidence": 1.3628038167953491,
+    "forget_set_mse": 0.37873074412345886,
+    "retain_set_mse": 0.3787318468093872,
+    "test_set_mse": 0.10662534832954407,
+    "graph_structure_impact": 0.9939722733687928
+  },
+  "neggrad": {
+    "fidelity_score": 9.350421444321673e-07,
+    "forgetting_efficacy": 1071049.1686578726,
+    "generalization_score": 6.926280930913836e-08,
+    "statistical_distance": 0.6397401690483093,
+    "spatial_correlation_divergence": 0.7149714994443295,
+    "temporal_pattern_divergence": 0.4691898648377184,
+    "prediction_confidence": 1.1136507987976074,
+    "forget_set_mse": 1585968.625,
+    "retain_set_mse": 1585965.875,
+    "test_set_mse": 1586451.375,
+    "graph_structure_impact": 1.004351517263307
+  },
+  "neggrad_ft": {
+    "fidelity_score": 3.4182459168122095,
+    "forgetting_efficacy": 0.29348028547773625,
+    "generalization_score": 0.8338287121949917,
+    "statistical_distance": 9.99999993922529e-09,
+    "spatial_correlation_divergence": 0.12386494440512592,
+    "temporal_pattern_divergence": 0.1292768488427701,
+    "prediction_confidence": 1.3468785285949707,
+    "forget_set_mse": 0.4332684874534607,
+    "retain_set_mse": 0.4332678020000458,
+    "test_set_mse": 0.13178014755249023,
+    "graph_structure_impact": 1.0063899274224182
+  },
+  "influence": {
+    "fidelity_score": 2.095194694852384e-09,
+    "forgetting_efficacy": 477548970.1195877,
+    "generalization_score": 1.9530579749214974e-10,
+    "statistical_distance": 0.6613887548446655,
+    "spatial_correlation_divergence": 0.13455469825099325,
+    "temporal_pattern_divergence": 0.6031411266863685,
+    "prediction_confidence": 1.5006887912750244,
+    "forget_set_mse": 705249792.0,
+    "retain_set_mse": 705250880.0,
+    "test_set_mse": 562615552.0,
+    "graph_structure_impact": 0.9999732139361046
+  },
+  "fisher": {
+    "fidelity_score": 3.572480410170652e-08,
+    "forgetting_efficacy": 27846617.010081746,
+    "generalization_score": 2.6464131199311604e-09,
+    "statistical_distance": 0.6532720327377319,
+    "spatial_correlation_divergence": 0.5347403398100595,
+    "temporal_pattern_divergence": 0.22355934960639118,
+    "prediction_confidence": 1.1278643608093262,
+    "forget_set_mse": 41483608.0,
+    "retain_set_mse": 41483832.0,
+    "test_set_mse": 41521136.0,
+    "graph_structure_impact": 1.0123055282219267
+  }
+}

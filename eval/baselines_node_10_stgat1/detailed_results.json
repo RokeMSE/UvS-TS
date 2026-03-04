@@ -1,0 +1,43 @@
+{
+  "finetune": {
+    "fidelity_score": 28.188737643502865,
+    "forgetting_efficacy": 0.03562166558664185,
+    "generalization_score": 1.0050299563937426,
+    "statistical_distance": 0.009292125701904297,
+    "spatial_correlation_divergence": 0.0020578532273377577,
+    "temporal_pattern_divergence": 0.004975666134496293,
+    "prediction_confidence": 1.4926410913467407,
+    "forget_set_mse": 0.06346093118190765,
+    "retain_set_mse": 0.06348623335361481,
+    "test_set_mse": 0.028508199378848076,
+    "graph_structure_impact": 0.9999998424402574
+  },
+  "neggrad": {
+    "fidelity_score": 0.007895863836310468,
+    "forgetting_efficacy": 126.22202202650426,
+    "generalization_score": 0.00012965604712351304,
+    "statistical_distance": 1.1648166179656982,
+    "spatial_correlation_divergence": 0.20953458356716748,
+    "temporal_pattern_divergence": 0.05369349051493022,
+    "prediction_confidence": 0.9446898102760315,
+    "forget_set_mse": 226.21107482910156,
+    "retain_set_mse": 226.20970153808594,
+    "test_set_mse": 220.98162841796875,
+    "graph_structure_impact": 0.9999999999557926
+  },
+  "neggrad_ft": {
+    "fidelity_score": 26.640732551906954,
+    "forgetting_efficacy": 0.037517331310938706,
+    "generalization_score": 0.9049193450072306,
+    "statistical_distance": 0.018510818481445312,
+    "spatial_correlation_divergence": 0.017114538439111857,
+    "temporal_pattern_divergence": 0.18690793691761265,
+    "prediction_confidence": 1.495824933052063,
+    "forget_set_mse": 0.06714049726724625,
+    "retain_set_mse": 0.06719941645860672,
+    "test_set_mse": 0.03166204318404198,
+    "graph_structure_impact": 0.9999998504727763
+  },
+  "influence": null,
+  "fisher": null
+}

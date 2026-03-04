@@ -404,7 +404,7 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             top_k_node=2, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
+            lambda_ewc=2.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
         )
     else:
         history = sa_ts.unlearn_faulty_subset(

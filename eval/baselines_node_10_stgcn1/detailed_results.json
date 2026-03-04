@@ -1,0 +1,55 @@
+{
+  "finetune": {
+    "fidelity_score": 25.13077578743108,
+    "forgetting_efficacy": 1.4914095887687864,
+    "generalization_score": 0.26710210107527493,
+    "statistical_distance": 0.020953059196472168,
+    "spatial_correlation_divergence": 0.13336990330037607,
+    "temporal_pattern_divergence": 0.3006031401719817,
+    "prediction_confidence": 1.7951055765151978,
+    "forget_set_mse": 5.249291896820068,
+    "retain_set_mse": 0.07342580705881119,
+    "test_set_mse": 0.41138604283332825,
+    "graph_structure_impact": 4.793682982648999
+  },
+  "neggrad": {
+    "fidelity_score": 2.228629587128631e-06,
+    "forgetting_efficacy": 236824.12943240697,
+    "generalization_score": 6.405473175347672e-07,
+    "statistical_distance": 0.6219666004180908,
+    "spatial_correlation_divergence": 0.16197314618610478,
+    "temporal_pattern_divergence": 0.9677704957383496,
+    "prediction_confidence": 0.9509482979774475,
+    "forget_set_mse": 821094.3125,
+    "retain_set_mse": 831254.8125,
+    "test_set_mse": 171544.046875,
+    "graph_structure_impact": 2.0612545144739722
+  },
+  "neggrad_ft": {
+    "fidelity_score": 4.582293547727444,
+    "forgetting_efficacy": 0.6908056908862449,
+    "generalization_score": 0.32301181542478724,
+    "statistical_distance": 0.02635645866394043,
+    "spatial_correlation_divergence": 0.12842764655047592,
+    "temporal_pattern_divergence": 0.2385787314993451,
+    "prediction_confidence": 1.1191844940185547,
+    "forget_set_mse": 2.4178216457366943,
+    "retain_set_mse": 0.40608417987823486,
+    "test_set_mse": 0.3401797413825989,
+    "graph_structure_impact": 2.6424300070298337
+  },
+  "influence": null,
+  "fisher": {
+    "fidelity_score": 9.272141136887918e-08,
+    "forgetting_efficacy": 5850814.249351654,
+    "generalization_score": 2.705929459266892e-08,
+    "statistical_distance": 0.6034940481185913,
+    "spatial_correlation_divergence": 0.1457830597879084,
+    "temporal_pattern_divergence": 0.6712866215405323,
+    "prediction_confidence": 0.9486646056175232,
+    "forget_set_mse": 20256612.0,
+    "retain_set_mse": 19878650.0,
+    "test_set_mse": 4060788.75,
+    "graph_structure_impact": 2.3428689307942787
+  }
+}

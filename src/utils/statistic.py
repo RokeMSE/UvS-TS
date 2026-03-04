@@ -106,12 +106,16 @@ def get_autocorrelation(data_tensor, max_lag=5, max_samples=200):
                     var_val = torch.var(series)
                     
                     if var_val > 1e-8:
+                        # Compute autocorrelation manually
+                        # ACF(lag) = Cov(X_t, X_{t+lag}) / Var(X_t)
                         cov = torch.mean((series[:-lag] - mean_val) * (series[lag:] - mean_val))
                         acf = cov / var_val
-                        if not torch.isnan(acf):
+                        
+                        if not torch.isnan(acf) and not torch.isinf(acf):
                             acf_vals.append(acf.item())
                             sample_count += 1
-                except:
+                except Exception as e:
+                    # Silently skip problematic samples
                     continue
                     
             if sample_count >= max_samples:

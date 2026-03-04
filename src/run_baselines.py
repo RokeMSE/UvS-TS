@@ -107,7 +107,7 @@ def prepare_data_loaders(train, test, A, args, num_timesteps_input, num_timestep
     }
 
 
-def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave):
+def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave, time_gen_loader):
     """Run all baseline methods and compare results"""
     baseline_runner = UnlearningBaselines(device=args.device)
     
@@ -123,11 +123,19 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
         print("BASELINE 1/6: Retrain from Scratch")
         print("="*80)
         try:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+
             retrained_model = baseline_runner.retrain_from_scratch(
                 model_class, raw_config, loaders['retain_loader'], A_wave,
                 num_epochs=100, learning_rate=1e-3,
                 faulty_node_idx=faulty_node_idx
             )
+
+            end.record()
+            torch.cuda.synchronize()
+
             all_models['retrain'] = retrained_model
             
             results = evaluate_unlearning(
@@ -135,6 +143,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
                 loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
                 loaders['new_A_wave'], A_wave, args.device, args.node_idx
             )
+            results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
             all_results['retrain'] = results
             print("Retrain completed")
         except Exception as e:
@@ -148,11 +157,18 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     print("BASELINE 2/6: Fine-tune on Retain Set")
     print("="*80)
     try:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         finetuned_model, _ = baseline_runner.finetune_on_retain(
             original_model, loaders['retain_loader'], loaders['new_A_wave'],
             num_epochs=50, learning_rate=1e-4,
             faulty_node_idx=faulty_node_idx
         )
+        end.record()
+        torch.cuda.synchronize()
+
         all_models['finetune'] = finetuned_model
         
         results = evaluate_unlearning(
@@ -160,6 +176,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
             loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
             loaders['new_A_wave'], A_wave, args.device, args.node_idx
         )
+        results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
         all_results['finetune'] = results
         print("Fine-tune completed")
     except Exception as e:
@@ -173,11 +190,19 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     print("BASELINE 3/6: Gradient Ascent (NegGrad)")
     print("="*80)
     try:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         neggrad_model, _ = baseline_runner.gradient_ascent(
             original_model, loaders['forget_loader'], A_wave,
             num_epochs=20, learning_rate=1e-4,
             faulty_node_idx=faulty_node_idx
         )
+
+        end.record()
+        torch.cuda.synchronize()
+
         all_models['neggrad'] = neggrad_model
         
         results = evaluate_unlearning(
@@ -185,6 +210,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
             loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
             loaders['new_A_wave'], A_wave, args.device, args.node_idx
         )
+        results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
         all_results['neggrad'] = results
         print("NegGrad completed")
     except Exception as e:
@@ -198,11 +224,19 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     print("BASELINE 4/6: Gradient Ascent + Fine-tune")
     print("="*80)
     try:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         neggrad_ft_model, _ = baseline_runner.gradient_ascent_plus_finetune(
             original_model, loaders['forget_loader'], loaders['retain_loader'], A_wave,
             neggrad_epochs=20, finetune_epochs=30,
             faulty_node_idx=faulty_node_idx
         )
+
+        end.record()
+        torch.cuda.synchronize()
+
         all_models['neggrad_ft'] = neggrad_ft_model
         
         results = evaluate_unlearning(
@@ -210,6 +244,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
             loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
             loaders['new_A_wave'], A_wave, args.device, args.node_idx
         )
+        results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
         all_results['neggrad_ft'] = results
         print("NegGrad+FT completed")
     except Exception as e:
@@ -223,10 +258,18 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     print("BASELINE 5/6: Influence Functions")
     print("="*80)
     try:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         influence_model, _ = baseline_runner.influence_function_unlearning(
             original_model, loaders['forget_loader'], loaders['train_loader'], A_wave,
             faulty_node_idx=faulty_node_idx
         )
+
+        end.record()
+        torch.cuda.synchronize()
+
         all_models['influence'] = influence_model
         
         results = evaluate_unlearning(
@@ -234,6 +277,8 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
             loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
             loaders['new_A_wave'], A_wave, args.device, args.node_idx
         )
+
+        results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
         all_results['influence'] = results
         print("Influence Functions completed")
     except Exception as e:
@@ -247,11 +292,19 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     print("BASELINE 6/6: Fisher Unlearning")
     print("="*80)
     try:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         fisher_model, _ = baseline_runner.fisher_unlearning(
             original_model, loaders['forget_loader'], loaders['retain_loader'], A_wave,
             num_epochs=50, lambda_fisher=10.0,
             faulty_node_idx=faulty_node_idx
         )
+
+        end.record()
+        torch.cuda.synchronize()
+
         all_models['fisher'] = fisher_model
         
         results = evaluate_unlearning(
@@ -259,6 +312,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
             loaders['retain_loader'], loaders['forget_loader'], loaders['test_loader'],
             loaders['new_A_wave'], A_wave, args.device, args.node_idx
         )
+        results['time'] = start.elapsed_time(end) / 1000 + time_gen_loader
         all_results['fisher'] = results
         print("Fisher Unlearning completed")
     except Exception as e:
@@ -333,6 +387,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run Unlearning Baselines')
     parser.add_argument('--enable-cuda', action='store_true', help='Enable CUDA')
     parser.add_argument('--unlearn-node', action='store_true', help='Node unlearning mode')
+    parser.add_argument('--all', action='store_true', help='Unlearn all model')
     parser.add_argument('--node-idx', type=int, help='Node index to unlearn')
     parser.add_argument('--input', type=str, required=True, help='Data directory')
     parser.add_argument('--type', type=str, default='stgcn', 
@@ -352,48 +407,115 @@ def main():
     print("\nLoading data...")
     A, train_original_data, test_original_data, means, stds = load_data_PEMS_BAY(args.input)
     
-    # Load original model
-    print("Loading original model...")
-    checkpoint = torch.load(
-        os.path.join(args.model, f"{args.type}_model.pt"),
-        map_location=args.device
-    )
-    
-    raw_config = checkpoint["config"]
-    
-    if args.type == 'stgcn':
-        model_class = STGCN
-    elif args.type == 'stgat':
-        model_class = STGAT
-    elif args.type == 'gwnet':
-        model_class = gwnet
-    else:
-        raise ValueError(f"Unknown model type: {args.type}")
-
-    original_model = model_class(**raw_config).to(args.device)
-
-    original_model.load_state_dict({
-        k: v.float() for k, v in checkpoint["model_state_dict"].items()
-    })
-    
-    num_timesteps_input = raw_config.get("nums_timestep_in", 12)
-    num_timesteps_output = raw_config.get("nums_step_out", 4)
-    
-    # Read forget_set
-    with open(args.forget_set, 'r', encoding='utf8') as f:
-        forget_set_json = json.load(f)
+    if not args.all:
+        # Load original model
+        print("Loading original model...")
+        checkpoint = torch.load(
+            os.path.join(args.model, f"{args.type}_model.pt"),
+            map_location=args.device
+        )
         
-    
-    print("Preparing data loaders...")
-    loaders = prepare_data_loaders(
-        train_original_data, test_original_data, A, args, num_timesteps_input, num_timesteps_output, forget_set_json
-    )
-    
-    run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'])
-    
-    print("\n" + "="*80)
-    print("BASELINE COMPARISON COMPLETED!")
-    print("="*80)
+        raw_config = checkpoint["config"]
+        
+        if args.type == 'stgcn':
+            model_class = STGCN
+        elif args.type == 'stgat':
+            model_class = STGAT
+        elif args.type == 'gwnet':
+            model_class = gwnet
+        else:
+            raise ValueError(f"Unknown model type: {args.type}")
+
+        original_model = model_class(**raw_config).to(args.device)
+
+        original_model.load_state_dict({
+            k: v.float() for k, v in checkpoint["model_state_dict"].items()
+        })
+        
+        num_timesteps_input = raw_config.get("nums_timestep_in", 12)
+        num_timesteps_output = raw_config.get("nums_step_out", 4)
+        
+        # Read forget_set
+        with open(args.forget_set, 'r', encoding='utf8') as f:
+            forget_set_json = json.load(f)
+            
+        
+        print("Preparing data loaders...")
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+
+        start.record()
+        loaders = prepare_data_loaders(
+            train_original_data, test_original_data, A, args, num_timesteps_input, num_timesteps_output, forget_set_json
+        )
+        end.record()
+        torch.cuda.synchronize()
+
+        time_gen_loader = start.elapsed_time(end) / 1000
+
+        
+        run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'], time_gen_loader)
+        
+        print("\n" + "="*80)
+        print("BASELINE COMPARISON COMPLETED!")
+        print("="*80)
+
+    else:
+        list_models = ['stgcn', 'stgat', 'gwnet']
+        for model_name in list_models:
+            args.type = model_name
+            
+            # Load original model
+            print("Loading original model...")
+            checkpoint = torch.load(
+                os.path.join(args.model, f"{args.type}_model.pt"),
+                map_location=args.device
+            )
+            
+            raw_config = checkpoint["config"]
+            
+            if args.type == 'stgcn':
+                model_class = STGCN
+            elif args.type == 'stgat':
+                model_class = STGAT
+            elif args.type == 'gwnet':
+                model_class = gwnet
+            else:
+                raise ValueError(f"Unknown model type: {args.type}")
+
+            original_model = model_class(**raw_config).to(args.device)
+
+            original_model.load_state_dict({
+                k: v.float() for k, v in checkpoint["model_state_dict"].items()
+            })
+            
+            num_timesteps_input = raw_config.get("nums_timestep_in", 12)
+            num_timesteps_output = raw_config.get("nums_step_out", 4)
+            
+            # Read forget_set
+            with open(args.forget_set, 'r', encoding='utf8') as f:
+                forget_set_json = json.load(f)
+                
+            
+            print("Preparing data loaders...")
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+
+            start.record()
+            loaders = prepare_data_loaders(
+                train_original_data, test_original_data, A, args, num_timesteps_input, num_timesteps_output, forget_set_json
+            )
+            end.record()
+            torch.cuda.synchronize()
+
+            time_gen_loader = start.elapsed_time(end) / 1000
+
+            
+            run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'], time_gen_loader)
+            
+            print("\n" + "="*80)
+            print("BASELINE COMPARISON COMPLETED!")
+            print("="*80)
 
 
 if __name__ == "__main__":

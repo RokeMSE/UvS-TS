@@ -46,7 +46,7 @@ class TemporalGenerativeReplay:
         return masked_data.to(torch.float32)
     
 # ----------------- Model reconstruction --------------------
-    def surrogate_stgcn(self, model: nn.Module, node_dataset,
+    def surrogate(self, model: nn.Module, node_dataset,
                         forget_indices: list, faulty_node_idx: int, num_timesteps_input, num_timesteps_output, 
                         device, A_hat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Reconstruct using STGCN model"""
@@ -60,7 +60,6 @@ class TemporalGenerativeReplay:
         
         node_input, node_target = generate_dataset(node_dataset, num_timesteps_input, num_timesteps_output)
         node_input = node_input.float()
-        node_target = node_target.float()
 
         with torch.no_grad():
             if hasattr(model, 'forward_unlearning_compatible'):
@@ -107,6 +106,7 @@ class TemporalGenerativeReplay:
                 seg_tensor = torch.cat(subset, dim=1).unsqueeze(0)  # (1, F, T_segment)
                 surrogate.append(seg_tensor.numpy())
 
+        print(surrogate[0].shape)
 
         return surrogate
 
@@ -206,12 +206,10 @@ class TemporalGenerativeReplay:
             Neutralized surrogate data
         """
         
-        if self.model_type == "stgcn":
-            surrogate_sample = self.surrogate_stgcn(model, node_dataset, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, device, A_wave)
-            # (B, N, F, T)
+
+        surrogate_sample = self.surrogate(model, node_dataset, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, device, A_wave)
+        # (B, N, F, T)
             
-        else:
-            raise ValueError(f"Unsupported model type: {self.model_type}")
 
         surrogate_sample = self.add_error_minimizing_noise(
             surrogate_sample, forget_indices, noise_scale=1.5 # Change accordingly to fit the desired 
@@ -249,7 +247,7 @@ class TemporalGenerativeReplay:
         print(forget_indices)
         if self.model_type == "stgcn":
             for node_dataset in dataset:
-                surrogate_sample.append(self.surrogate_stgcn(model, node_dataset, forget_indices, faulty_node_idx, 
+                surrogate_sample.append(self.surrogate(model, node_dataset, forget_indices, faulty_node_idx, 
                                                              num_timesteps_input, num_timesteps_output, device, A_wave))
             # (B, N, F, T)
         else:

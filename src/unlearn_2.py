@@ -16,15 +16,16 @@ from models.stgcn import STGCN
 from models.stgat import STGAT
 from models.gwn import gwnet
 from utils.data_loader import load_data_PEMS_BAY
+from utils.filter_forget import filter_forget
 from utils.data_utils import prepare_unlearning_data
 from unlearning.pa_ewc import PopulationAwareEWC
-from unlearning.t_gr import TemporalGenerativeReplay
+from unlearning.tgr_test import TemporalGenerativeReplay
 from unlearning.motif_def import discover_motifs_proxy
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
+from utils.replace_surrogate import replace_target, replace_dataset
 # Import evaluation functions
 from evaluate import evaluate_unlearning
 import sys
-import time
 sys.path.append('src')
 
 class SATimeSeries:
@@ -74,6 +75,7 @@ class SATimeSeries:
             dataset, forget_ex, faulty_node_idx, threshold
         )
         print(f"Forget samples: {len(forget_indices)}, Retain samples: {len(retain_indices)}")
+        forget_indices = [[5, 24], [50, 70]]
         print(forget_indices)
         
         global forget_loader, retain_loader
@@ -85,48 +87,18 @@ class SATimeSeries:
             retain_loader = DataLoader(TensorDataset(train_input, train_target), batch_size=batch_size, shuffle=True)
             return {'total_loss': [], 'surrogate_loss': [], 'ewc_penalty': [], 'retain_loss': []}
 
-        forget_data = []
-        for item in forget_indices:
-            forget_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]]) 
+        retain_input, retain_target, Dr_indices, forget_input, forget_target, Df_indices = filter_forget(train_input, train_target, forget_indices, num_timesteps_input, num_timesteps_output)
 
-        retain_data = []
-        for item in retain_indices:
-            retain_data.append(dataset[faulty_node_idx:faulty_node_idx+1, :,item[0]:item[1]])
+        retain_loader = DataLoader(TensorDataset(retain_input, retain_target), batch_size=batch_size, shuffle=True)
 
-        all_features_retain = []
-        all_targets_retain = []
-        for item in retain_data:
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
-            if feature.numel() > 0:
-                all_features_retain.append(feature)
-                all_targets_retain.append(target)
-        
-        if not all_features_retain:
-            print("No retain samples generated. Skipping training.")
-            return {'total_loss': [], 'surrogate_loss': [], 'ewc_penalty': [], 'retain_loss': []}
+        output_start = window_starts + num_timesteps_input
+        output_times = output_start.unsqueeze(1) + torch.arange(num_timesteps_output).unsqueeze(0)
+        output_forget_mask = torch.zeros(nums_window, num_timesteps_output, dtype=torch.bool)
+        for start, end in forget_indices:
+            output_forget_mask |= (output_times >= start) & (output_times < end)
 
-        all_features_retain = torch.cat(all_features_retain, dim=0)
-        all_targets_retain = torch.cat(all_targets_retain, dim=0)
-        retain_dataset = TensorDataset(all_features_retain, all_targets_retain)
-        retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
-
-        all_features_forget = []
-        all_targets_forget = []
-        for item in forget_data:
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
-            if feature.numel() > 0:
-                all_features_forget.append(feature)
-                all_targets_forget.append(target)
-        
-        if not all_features_forget:
-            print("No forget samples generated. Unlearning will not be performed.")
-            forget_loader = [] # Empty loader is ok, training will be skipped
-        else:
-            all_features_forget = torch.cat(all_features_forget, dim=0)
-            all_targets_forget = torch.cat(all_targets_forget, dim=0)
-            forget_dataset = TensorDataset(all_features_forget, all_targets_forget)
-            forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
-        
+        forget_output_mask = output_forget_mask[Df_indices]
+                
         # --- Compute FIM
         print("Computing Population-Aware FIM...")
         self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
@@ -136,38 +108,17 @@ class SATimeSeries:
         # --- Create surrogate data using T-GR
         print("Creating surrogate data...")
         surrogate_data = self.t_gr.perform_temporal_generative_replay_subset(
-            self.model, dataset[faulty_node_idx:faulty_node_idx+1, :, :],
-            forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output,
-            self.device, A_wave
+            self.model, forget_input, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, self.device, A_wave
         )
-
-        surrogate_features, surrogate_targets = [], []
-        for item in surrogate_data:
-            if isinstance(item, torch.Tensor):
-                item = item.cpu().numpy()
-            item = item.astype(np.float32)
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
-            if feature.numel() > 0:
-                surrogate_features.append(feature)
-                surrogate_targets.append(target)
         
-        if not surrogate_features:
-            print("Warning: No surrogate samples generated. Skipping training loop.")
-            return {'total_loss': [], 'surrogate_loss': [], 'ewc_penalty': [], 'retain_loss': []}
+        forget_target = replace_target(forget_target, surrogate_data, Df_indices, forget_indices, faulty_node_idx, num_timesteps_input)
+        forget_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
 
-        surrogate_features = torch.cat(surrogate_features, dim=0)
-        surrogate_targets = torch.cat(surrogate_targets, dim=0)
-        surrogate_dataset = TensorDataset(surrogate_features, surrogate_targets)
-        surrogate_loader = DataLoader(surrogate_dataset, batch_size=batch_size, shuffle=True)
         
-        history = self.training(surrogate_loader, retain_loader, A_wave, 
+        
+        history = self.training(forget_loader, retain_loader, A_wave, 
                                 num_epochs, learning_rate,
                                 lambda_ewc, lambda_surrogate, lambda_retain)
-        
-        dataset_new = copy.deepcopy(dataset)
-        for i in range(len(forget_indices)):
-            dataset_new[faulty_node_idx, :, forget_indices[i][0]:forget_indices[i][1]] = surrogate_data[i].squeeze(0)
-        dataset_new = dataset_new * stds.reshape(1, -1, 1) + means.reshape(1, -1, 1)
         
         """ if not os.path.exists(args.input + f"/Unlearn_subset_node_{faulty_node_idx}"):
             os.makedirs(args.input + f"/Unlearn_subset_node_{faulty_node_idx}")
@@ -257,13 +208,10 @@ class SATimeSeries:
             self.model, retain_loader, A_wave, max_samples=500
         )
         print("Creating surrogate data...")
-        print(forget_data.shape)
         surrogate_data = self.t_gr.perform_temporal_generative_replay_node(
             self.model, forget_data, faulty_node_idx, num_timesteps_input, num_timesteps_output,
             self.device, A_wave
         )
-
-        return
 
         surrogate_features, surrogate_targets = [], []
         for item in surrogate_data:
@@ -281,6 +229,8 @@ class SATimeSeries:
         surrogate_targets = torch.cat(surrogate_targets, dim=0)
         surrogate_dataset = TensorDataset(surrogate_features, surrogate_targets)
         surrogate_loader = DataLoader(surrogate_dataset, batch_size=batch_size, shuffle=True)
+
+        return
 
         history = self.training(surrogate_loader, retain_loader, A_wave, 
                                 num_epochs, learning_rate,
@@ -302,7 +252,7 @@ class SATimeSeries:
         return history, dataset
 
 
-    def training(self, surrogate_loader, retain_loader, A_wave,
+    def training(self, forget_loader, retain_loader, A_wave,
                 num_epochs=50, learning_rate=5e-5, 
                 lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0):
         print("Unlearn training...")
@@ -313,7 +263,7 @@ class SATimeSeries:
             self.model.train()
             total_loss_epoch = 0
             
-            if not surrogate_loader or not retain_loader:
+            if not forget_loader or not retain_loader:
                 print(f"Epoch {epoch + 1}/{num_epochs}: Skipping, empty loader.")
                 history['total_loss'].append(0)
                 history['surrogate_loss'].append(0)
@@ -321,7 +271,7 @@ class SATimeSeries:
                 history['retain_loss'].append(0)
                 continue
             
-            for surrogate_batch, retain_batch in zip(surrogate_loader, retain_loader):
+            for surrogate_batch, retain_batch in zip(forget_loader, retain_loader):
                 optimizer.zero_grad()
                 loss_dict = self.compute_sa_ts_objective(surrogate_batch, retain_batch, lambda_ewc, lambda_surrogate, lambda_retain, A_wave)
                 total_loss = loss_dict['total_loss']
@@ -330,7 +280,7 @@ class SATimeSeries:
                 optimizer.step()
                 total_loss_epoch += total_loss.item()
             
-            history['total_loss'].append(total_loss_epoch / len(surrogate_loader))
+            history['total_loss'].append(total_loss_epoch / len(forget_loader))
             history['surrogate_loss'].append(loss_dict['surrogate_loss'].item())
             history['ewc_penalty'].append(loss_dict['ewc_penalty'].item())
             history['retain_loss'].append(loss_dict['retain_loss'].item())
@@ -390,8 +340,7 @@ class SATimeSeries:
             'ewc_penalty': ewc_penalty,
             'retain_loss': retain_loss
         }
-    
-    
+
 def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input, num_timesteps_output, test_loader, forget_set=None):
     sa_ts = SATimeSeries(model, A_wave, args.device)
     
@@ -495,6 +444,7 @@ def main():
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
 
+
     MODEL_FARM = {
         "stgcn": lambda: STGCN(**checkpoint["config"]),
         "stgat": lambda: STGAT(**checkpoint["config"]),
@@ -504,7 +454,6 @@ def main():
 
 
     if not args.all:
-        
         checkpoint = torch.load(args.model + f"/{args.type}_model.pt", map_location=args.device)
         config = checkpoint["config"]
         num_timesteps_input = config["nums_step_in"]

@@ -66,9 +66,9 @@ class gwnet(nn.Module):
         self.gconv = nn.ModuleList()
         self.config = {
             "nums_node": nums_node,
-            "nums_feature_in": nums_feature_in,
             "nums_step_in": nums_step_in,
             "nums_step_out": nums_step_out,
+            "nums_feature_in": nums_feature_in,
             "nums_feature_out": nums_feature_out,
             "dropout": dropout,
             "supports": supports, 
@@ -82,7 +82,6 @@ class gwnet(nn.Module):
             "kernel_size": kernel_size,
             "blocks": blocks,
             "layers": layers
-
         }
 
         self.start_conv = nn.Conv2d(in_channels=nums_feature_in,

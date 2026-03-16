@@ -253,7 +253,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
         traceback.print_exc()
         all_results['neggrad_ft'] = None
     
-    # 5. Influence Functions
+    5. Influence Functions
     print("\n" + "="*80)
     print("BASELINE 5/6: Influence Functions")
     print("="*80)
@@ -327,7 +327,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     
     generate_comparison_report(all_results, args)
     
-    save_dir = os.path.join(args.model, f"baselines_node_{args.node_idx}")
+    save_dir = os.path.join(args.model, f"baselines_node__{args.type}_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     
     for name, model in all_models.items():
@@ -346,7 +346,7 @@ def generate_comparison_report(all_results, args):
     metrics = [
         'fidelity_score', 'forgetting_efficacy', 'generalization_score',
         'forget_set_mse', 'retain_set_mse', 'test_set_mse',
-        'spatial_correlation_divergence', 'temporal_pattern_divergence'
+        'spatial_correlation_divergence', 'temporal_pattern_divergence', 'time'
     ]
     
     data = []
@@ -364,7 +364,7 @@ def generate_comparison_report(all_results, args):
     print("="*80)
     print(df.to_string(index=False))
     
-    save_dir = os.path.join(args.model, f"baselines_node_{args.node_idx}")
+    save_dir = os.path.join(args.model, f"baselines_node_{args.type}_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     df.to_csv(os.path.join(save_dir, f"{args.type}_baseline_comparison.csv"), index=False)
     
@@ -423,6 +423,7 @@ def main():
             model_class = STGAT
         elif args.type == 'gwnet':
             model_class = gwnet
+            raw_config['device'] = args.device
         else:
             raise ValueError(f"Unknown model type: {args.type}")
 
@@ -432,7 +433,7 @@ def main():
             k: v.float() for k, v in checkpoint["model_state_dict"].items()
         })
         
-        num_timesteps_input = raw_config.get("nums_timestep_in", 12)
+        num_timesteps_input = raw_config.get("nums_step_in", 12)
         num_timesteps_output = raw_config.get("nums_step_out", 4)
         
         # Read forget_set
@@ -463,6 +464,7 @@ def main():
     else:
         list_models = ['stgcn', 'stgat', 'gwnet']
         for model_name in list_models:
+            print(f"UNLEARNING ON MODEL: {model_name}")
             args.type = model_name
             
             # Load original model
@@ -480,6 +482,7 @@ def main():
                 model_class = STGAT
             elif args.type == 'gwnet':
                 model_class = gwnet
+                raw_config['device'] = args.device
             else:
                 raise ValueError(f"Unknown model type: {args.type}")
 
@@ -512,6 +515,9 @@ def main():
 
             
             run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'], time_gen_loader)
+
+            del original_model
+            torch.cuda.empty_cache()  
             
             print("\n" + "="*80)
             print("BASELINE COMPARISON COMPLETED!")

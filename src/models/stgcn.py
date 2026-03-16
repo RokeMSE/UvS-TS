@@ -3,8 +3,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from timeBlock import TimeBlock
 import pickle
+
+class TimeBlock(nn.Module):
+    """
+    Neural network block that applies a temporal convolution to each node of
+    a graph in isolation.
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size=3):
+        """
+        :param in_channels: Number of input features at each node in each time
+        step.
+        :param out_channels: Desired number of output channels at each node in
+        each time step.
+        :param kernel_size: Size of the 1D temporal kernel.
+        """
+        super(TimeBlock, self).__init__()
+        # Adjust padding for 'same' convolution
+        padding = (0, (kernel_size - 1) // 2)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, (1, kernel_size), padding=padding)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, (1, kernel_size), padding=padding)
+        self.conv3 = nn.Conv2d(in_channels, out_channels, (1, kernel_size), padding=padding)
+
+    def forward(self, X):
+        """
+        :param X: Input data of shape (batch_size, num_nodes, num_timesteps,
+        num_features=in_channels)
+        :return: Output data of shape (batch_size, num_nodes,
+        num_timesteps, num_features_out=out_channels)
+        """
+        # Convert into NCHW format for pytorch to perform convolutions.
+        X = X.permute(0, 3, 1, 2)  # (B, C_in, N, T)
+        temp = self.conv1(X) + torch.sigmoid(self.conv2(X))
+        out = F.relu(temp + self.conv3(X))
+        # Convert back from NCHW to NHWC
+        out = out.permute(0, 2, 3, 1)  # (B, N, T, C_out)
+        return out
 
 class STGCNBlock(nn.Module):
     """
@@ -81,21 +116,18 @@ class STGCN(nn.Module):
 
         # number of values per node after temporal blocks (flatten length)
         # Keep the original reduction formula but you can adjust if kernel sizes differ.
-        reduced_time_steps = (nums_step_in - 2 * 5)  # keep same heuristic as original code
-        if reduced_time_steps <= 0:
-            raise ValueError("num_timesteps_input too small for the temporal reductions used in the network.")
+        
 
         # Map flattened per-node features to (T_out * features_out)
         self.num_timesteps_output = nums_step_out
         self.num_features_output = nums_feature_out
-        self.fully = nn.Linear(reduced_time_steps * 64,
-                               nums_step_out * nums_feature_out)
+        self.fully = nn.Linear(nums_step_in * 64, nums_step_out * nums_feature_out)
 
         self.config = {
             "nums_node": nums_node,
-            "nums_feature_in": nums_feature_in,
             "nums_step_in": nums_step_in,
             "nums_step_out": nums_step_out,
+            "nums_feature_in": nums_feature_in,
             "nums_feature_out": nums_feature_out
         }
 
@@ -105,6 +137,7 @@ class STGCN(nn.Module):
         :param X: Input data of shape (batch_size, num_nodes, num_timesteps, num_features=in_channels).
         :return: Tensor of shape (batch_size, num_nodes, num_timesteps_output, num_features_output)
         """
+
         out1 = self.block1(X, A_hat)
         out2 = self.block2(out1, A_hat)
         out3 = self.last_temporal(out2)  # (B, N, T_reduced, 64)

@@ -12,7 +12,7 @@ from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 num_timesteps_input = 12
 num_timesteps_output = 4
 
-epochs = 100
+epochs = 3
 batch_size = 68
 
 def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size, device):
@@ -83,6 +83,9 @@ if __name__ == '__main__':
     test_input, test_target = generate_dataset(test_original_data,
                                                 num_timesteps_input=num_timesteps_input,
                                                 num_timesteps_output=num_timesteps_output)
+    
+    print(training_input.shape)
+    print(training_target.shape)
 
     # (B, N, T, F), (B, N, T)
 
@@ -104,10 +107,10 @@ if __name__ == '__main__':
     if not args.all:
         if args.type == 'stgcn':
             model = STGCN(A_wave.shape[0],
-                            training_input.shape[3],
-                            num_timesteps_input,
-                            num_timesteps_output, 
-                            num_features_output=3)
+                            nums_step_in=num_timesteps_input,
+                            nums_step_out=num_timesteps_output, 
+                            nums_feature_in=training_input.shape[3],
+                            nums_feature_out=3)
             
         elif args.type == 'stgat':
             model = STGAT(A_wave.shape[0],
@@ -118,13 +121,12 @@ if __name__ == '__main__':
                           n_heads=8)
             
         elif args.type == 'gwnet':
-            
-            model = gwnet(device=args.device, 
-                          num_nodes=A_wave.shape[0], 
-                          num_step_input=num_timesteps_input,
-                          num_step_output=num_timesteps_output,
-                          in_feature=3, 
-                          out_feature=3,
+            model = gwnet(num_nodes=A_wave.shape[0], 
+                          nums_step_in=num_timesteps_input,
+                          nums_step_out=num_timesteps_output,
+                          nums_feature_in=3, 
+                          nums_feature_out=3,
+                          device=args.device,
                           supports=supports,
                           aptinit=aptinit)
             

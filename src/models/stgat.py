@@ -24,11 +24,11 @@ class STGAT(torch.nn.Module):
 
         self.config = {
             "nums_node": nums_node,
-            "nums_feature_in": nums_feature_in,
             "nums_step_in": nums_step_in,
             "nums_step_out": nums_step_out,
+            "nums_feature_in": nums_feature_in,
             "nums_feature_out": nums_feature_out,
-            "n_head": n_heads,
+            "n_heads": n_heads,
             "dropout": dropout,
         }
 

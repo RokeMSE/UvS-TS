@@ -253,7 +253,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
         traceback.print_exc()
         all_results['neggrad_ft'] = None
     
-    5. Influence Functions
+    ### 5. Influence Functions
     print("\n" + "="*80)
     print("BASELINE 5/6: Influence Functions")
     print("="*80)

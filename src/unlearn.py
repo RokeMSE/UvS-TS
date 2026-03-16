@@ -495,13 +495,6 @@ def main():
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
 
-    MODEL_FARM = {
-        "stgcn": lambda: STGCN(**checkpoint["config"]),
-        "stgat": lambda: STGAT(**checkpoint["config"]),
-        "gwnet": lambda: gwnet(**checkpoint["config"])
-
-    }
-
 
     if not args.all:
         
@@ -512,7 +505,16 @@ def main():
         num_features_input = config["nums_feature_in"]
         num_features_output = config["nums_feature_out"]
 
-        model = MODEL_FARM[args.type]()
+        
+        if args.type == 'stgcn':
+            model_class = STGCN
+        elif args.type == 'stgat':
+            model_class = STGAT
+        elif args.type == 'gwnet':
+            model_class = gwnet
+            config['device'] = args.device
+
+        model = model_class(**config).to(args.device)
         model.load_state_dict({k: v.float() for k, v in checkpoint["model_state_dict"].items()})
 
         test_input, test_target = generate_dataset(test_original_data,
@@ -529,14 +531,30 @@ def main():
         for model_name in list_models:
             args.type = model_name
 
+            print(f"UNLEARNING ON MODEL: {model_name}")
+            args.type = model_name
+            
+            # Load original model
+            print("Loading original model...")
             checkpoint = torch.load(args.model + f"/{args.type}_model.pt", map_location=args.device)
             config = checkpoint["config"]
+            
+            if args.type == 'stgcn':
+                model_class = STGCN
+            elif args.type == 'stgat':
+                model_class = STGAT
+            elif args.type == 'gwnet':
+                model_class = gwnet
+                config['device'] = args.device
+            else:
+                raise ValueError(f"Unknown model type: {args.type}")
+
             num_timesteps_input = config["nums_step_in"]
             num_timesteps_output = config["nums_step_out"]
             num_features_input = config["nums_feature_in"]
             num_features_output = config["nums_feature_out"]
 
-            model = MODEL_FARM[args.type]()
+            model = model_class(**config).to(args.device)
             model.load_state_dict({k: v.float() for k, v in checkpoint["model_state_dict"].items()})
 
             test_input, test_target = generate_dataset(test_original_data,

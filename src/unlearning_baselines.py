@@ -413,7 +413,7 @@ class UnlearningBaselines:
         
         # Compute Fisher Info on Retain Set (exclude faulty node if specified)
         print("Computing Fisher Information Matrix on retain set...")
-        fisher_diagonal = self._compute_fisher_diagonal(model, retain_loader, A_wave, faulty_node_idx)
+        fisher_diagonal = self._compute_fisher_diagonal(model, retain_loader, A_wave, faulty_node_idx=faulty_node_idx)
         
         original_params = {name: param.clone() for name, param in model.named_parameters()}
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)

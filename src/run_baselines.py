@@ -17,18 +17,6 @@ from evaluate import evaluate_unlearning
 from unlearning_baselines import UnlearningBaselines
 
 
-def normalize_stgat_config(config):
-    """Remap legacy checkpoint config keys to current STGAT.__init__ parameter names."""
-    remap = {
-        "num_nodes": "nums_node",
-        "num_features": "nums_feature_in",
-        "num_features_out": "nums_feature_out",
-        "num_timesteps_input": "nums_step_in",
-        "num_timesteps_output": "nums_step_out",
-    }
-    return {remap.get(k, k): v for k, v in config.items()}
-
-
 def prepare_data_loaders(train, test, A, args, num_timesteps_input, num_timesteps_output, forget_set=None):
     """Prepare all necessary data loaders for unlearning experiments"""
 
@@ -433,7 +421,6 @@ def main():
             model_class = STGCN
         elif args.type == 'stgat':
             model_class = STGAT
-            raw_config = normalize_stgat_config(raw_config)
         elif args.type == 'gwnet':
             model_class = gwnet
             raw_config['device'] = args.device
@@ -445,7 +432,7 @@ def main():
         original_model.load_state_dict({
             k: v.float() for k, v in checkpoint["model_state_dict"].items()
         })
-
+        
         num_timesteps_input = raw_config.get("nums_step_in", 12)
         num_timesteps_output = raw_config.get("nums_step_out", 4)
         
@@ -493,7 +480,6 @@ def main():
                 model_class = STGCN
             elif args.type == 'stgat':
                 model_class = STGAT
-                raw_config = normalize_stgat_config(raw_config)
             elif args.type == 'gwnet':
                 model_class = gwnet
                 raw_config['device'] = args.device

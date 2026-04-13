@@ -98,6 +98,10 @@ class PopulationAwareEWC:
     def _safe_get_autocorrelation(self, data: torch.Tensor, max_lag: int = 5) -> Optional[torch.Tensor]:
         """Wrapper for autocorrelation calculation"""
         try:
+            # get_autocorrelation expects (batch, seq_len, num_nodes)
+            # Model outputs are (B, N, T, F) — reshape to (B, T, N)
+            if data.dim() == 4:
+                data = data[..., 0].permute(0, 2, 1)
             if data.shape[1] <= max_lag:  # Not enough data for meaningful ACF
                 return None
             return get_autocorrelation(data, max_lag=min(max_lag, data.shape[1] // 4))
@@ -202,9 +206,16 @@ class PopulationAwareEWC:
             if sample_count > 0:
                 for name in fim_diagonal:
                     fim_diagonal[name] /= sample_count
-                    # Normalize FIM to prevent tiny values
-                    fim_diagonal[name] = fim_diagonal[name] / (fim_diagonal[name].mean() + 1e-8)
-                    fim_diagonal[name] += 1e-8  # Small constant for stability
+
+                # Global normalisation: divide every tensor by the single
+                # mean computed across ALL parameters so that relative
+                # importance between parameter groups is preserved.
+                # Per-tensor normalisation (old code) made every parameter
+                # equally "important" and destroyed that signal.
+                all_vals = torch.cat([v.flatten() for v in fim_diagonal.values()])
+                global_mean = all_vals.mean().clamp(min=1e-8)
+                for name in fim_diagonal:
+                    fim_diagonal[name] = fim_diagonal[name] / global_mean + 1e-8
             else:
                 print("FIM calc - No samples processed")
                 for name in fim_diagonal:

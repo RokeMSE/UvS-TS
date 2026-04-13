@@ -174,6 +174,13 @@ class gwnet(nn.Module):
         new_supports = None
         if self.gcn_bool and self.addaptadj and self.supports is not None:
             adp = F.softmax(F.relu(torch.mm(self.nodevec1, self.nodevec2)), dim=1)
+            # Hard-zero any nodes registered as isolated so that the softmax
+            # uniform-distribution artefact (zeroed row → 1/N after softmax)
+            # cannot route information through them.
+            if hasattr(self, '_isolated_nodes') and self._isolated_nodes:
+                for node_idx in self._isolated_nodes:
+                    adp[node_idx, :] = 0.0
+                    adp[:, node_idx] = 0.0
             new_supports = self.supports + [adp]
 
         # WaveNet layers

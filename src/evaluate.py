@@ -45,20 +45,22 @@ def get_model_predictions(model: nn.Module, data_loader: DataLoader,
             
     return torch.cat(predictions), torch.cat(ground_truth)
 
-def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, 
+def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader,
                    new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
-    Measure the performance preservation on the retain set.
-    Higher is better (closer to 1.0 means similar performance).
+    Measure performance preservation on the retain set.
+    Convention: mse_unlearned / mse_original.
+      ~1.0  = retain-set performance unchanged (ideal)
+      > 1.0 = retain-set degraded (bad)
+      < 1.0 = retain-set improved (unusual, check for data leakage)
     """
     preds_unlearned, truth = get_model_predictions(model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx)
     preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device, faulty_node_idx)
-    
+
     mse_unlearned = mean_squared_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     mse_original = mean_squared_error(truth.numpy().flatten(), preds_original.numpy().flatten())
-    
-    # Return the ratio of MSEs, should ~ 1
-    return mse_original / (mse_unlearned + 1e-8)
+
+    return mse_unlearned / (mse_original + 1e-8)
 
 def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, forget_loader: DataLoader, 
                         new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
@@ -76,19 +78,22 @@ def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, f
     # Return the ratio (how much worse the unlearned model is)
     return mse_unlearned / (mse_original + 1e-8)
 
-def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, test_loader: DataLoader, 
+def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, test_loader: DataLoader,
                          new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
-    Measure the performance on the test set to check for overfitting to the retain set.
-    Should ~1.0 (unlearned model performs similarly to original).
+    Measure test-set performance to check for overfitting to the retain set.
+    Convention: mse_unlearned / mse_original.
+      ~1.0  = generalization unchanged (ideal)
+      > 1.0 = unlearned model generalises worse
+      < 1.0 = unlearned model generalises better (unlikely without retain-set shift)
     """
     preds_unlearned, truth = get_model_predictions(model_unlearned, test_loader, new_A_wave, device)
     preds_original, _ = get_model_predictions(model_original, test_loader, A_wave, device)
-    
+
     mse_unlearned = mean_squared_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     mse_original = mean_squared_error(truth.numpy().flatten(), preds_original.numpy().flatten())
-    
-    return mse_original / (mse_unlearned + 1e-8)
+
+    return mse_unlearned / (mse_original + 1e-8)
 
 def statistical_distance(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, 
                          new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
@@ -309,22 +314,23 @@ def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module,
                        test_loader: DataLoader, new_A_wave: torch.Tensor, 
                        A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Dict[str, float]:
     """
-    Comprehensive evaluation with improved metrics for STGCN unlearning.
-    
-    Metrics:
-    - Fidelity: Performance preservation on retain set (higher is better, ~1.0 ideal)
-    - Forgetting Efficacy: Error increase on forget set (higher is better, >>1.0 ideal)
-    - Generalization: Performance on test set (higher is better, ~1.0 ideal)
-    - Statistical Distance: Distribution similarity on retain set (lower is better)
-    
-    New Metrics:
-    - Spatial Correlation Divergence: Disruption of spatial patterns (higher is better)
-    - Temporal Pattern Divergence: Disruption of temporal patterns (higher is better)
-    - Prediction Confidence: Uncertainty on forget set (higher is better)
-    - Forget Set MSE: Direct error on forget data (higher is better)
-    - Retain Set MSE: Direct error on retain data (lower is better)
-    - Test Set MSE: Direct error on test data (lower is better)
-    - Graph Structure Impact: Effect of graph modification (higher is better for node unlearning)
+    Comprehensive evaluation for ST-GNN unlearning.
+
+    All ratio metrics use the convention  mse_unlearned / mse_original
+    so that 1.0 always means "identical to the original model" and the
+    direction of a good result is consistent:
+
+    - Fidelity             retain-set ratio  ~1.0 ideal  (> 1.0 = degraded)
+    - Forgetting Efficacy  forget-set ratio  >> 1.0 ideal (higher = more forgotten)
+    - Generalization       test-set ratio    ~1.0 ideal  (> 1.0 = worse generalisation)
+    - Statistical Distance MMD on retain-set predictions  lower is better
+    - Spatial Correlation Divergence  forget-set spatial disruption  higher is better
+    - Temporal Pattern Divergence     forget-set temporal disruption higher is better
+    - Prediction Confidence           CoV on forget-set preds        higher = more uncertain
+    - Forget Set MSE      raw MSE on forget data  higher is better
+    - Retain Set MSE      raw MSE on retain data  lower is better
+    - Test Set MSE        raw MSE on test data    lower is better
+    - Graph Structure Impact  ratio with modified vs original graph  higher is better
     """
     results = {}
     

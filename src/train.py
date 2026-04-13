@@ -12,7 +12,7 @@ from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 num_timesteps_input = 12
 num_timesteps_output = 4
 
-epochs = 3
+epochs = 100
 batch_size = 68
 
 def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size, device):

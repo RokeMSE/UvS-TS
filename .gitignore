@@ -5,3 +5,4 @@ frame.txt
 *.exe
 *.pth
 forget_set.json
+/src/data

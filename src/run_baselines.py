@@ -80,7 +80,7 @@ def prepare_data_loaders(train, test, A, args, num_timesteps_input, num_timestep
         new_A_wave = torch.from_numpy(new_A_wave).float()
     
     # Create data loaders
-    batch_size = 512  # Adjust based on model type if needed
+    batch_size = 128  # Adjust based on model type if needed
     train_loader = DataLoader(
         TensorDataset(train_input, train_target), 
         batch_size=batch_size, shuffle=True

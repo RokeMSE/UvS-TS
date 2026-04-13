@@ -1,5 +1,5 @@
 """ Run the 3 Orders from the Initial Models using files from the unlearning folder
-- Combine Components: Load the pre-trained model ($θ*$).
+- Combine Components: Load the pre-trained model ($Î¸*$).
 - Partition Data: Use your PEPA implementation to get $D_f$ and $D_r$.
 - Calculate FIM: Compute the PA-FIM ($F^T$) using $D_r$ and your PA-EWC module. """
 import torch
@@ -56,7 +56,7 @@ class SATimeSeries:
     def unlearn_faulty_subset(self, dataset, forget_ex, faulty_node_idx, A_wave, means, stds, 
                            num_timesteps_input, num_timesteps_output, threshold=0.1,
                            num_epochs=50, learning_rate=5e-5, 
-                           lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512):
+                           lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=128):
         """
         Main unlearning process for faulty node
         """
@@ -75,7 +75,6 @@ class SATimeSeries:
             dataset, forget_ex, faulty_node_idx, threshold
         )
         print(f"Forget samples: {len(forget_indices)}, Retain samples: {len(retain_indices)}")
-        forget_indices = [[5, 24], [50, 70]]
         print(forget_indices)
         
         global forget_loader, retain_loader
@@ -124,7 +123,7 @@ class SATimeSeries:
             os.makedirs(args.input + f"/Unlearn_subset_node_{faulty_node_idx}")
         np.save(args.input + f"/Unlearn_subset_node_{faulty_node_idx}/PEMSBAY.npy", dataset_new.transpose(2, 0, 1)) """
 
-        return history
+        return history, retain_loader, forget_loader
     
     
     def unlearn_faulty_node(self, dataset, faulty_node_idx, A_wave, means, stds, 
@@ -353,14 +352,14 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             top_k_node=2, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=64
         )
     else:
-        history = sa_ts.unlearn_faulty_subset(
+        history, retain_loader, forget_loader = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_set, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             threshold=0.5, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=512
+            lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=64
         )
     end.record()
     torch.cuda.synchronize()
@@ -397,7 +396,7 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
     evaluation_results['time'] = start.elapsed_time(end) / 1000 # second
 
     # Save eval results
-    with open(path + f"/evaluation_results_{args.type}.txt", "w") as f:     
+    with open(path + f"/unlearn2_evaluation_results_{args.type}.txt", "w") as f:     
         for metric, value in evaluation_results.items():
             f.write(f"{metric}: {value:.4f}\n")
 
@@ -412,7 +411,7 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
         'model_state_dict': model.state_dict(),
         'history': history,
         'faulty_node_idx': args.node_idx
-    }, args.model + f"/{args.type}_unlearned_model.pt")
+    }, args.model + f"/unlearn2_{args.type}_unlearned_model.pt")
     
     print("Unlearning completed!")
 
@@ -509,7 +508,7 @@ def main():
                                                 num_timesteps_input=num_timesteps_input,
                                                 num_timesteps_output=num_timesteps_output)
             test_dataset = TensorDataset(test_input, test_target)
-            test_loader = DataLoader(test_dataset, batch_size=512, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=128, shuffle=True)
 
             unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input, num_timesteps_output, test_loader, forget_set)
 
@@ -524,7 +523,7 @@ if __name__ == "__main__":
     parser.add_argument('--all', action='store_true', help='Unlearning all model')
     parser.add_argument('--node-idx', type=int, help='Node index need to be unlearned')
     parser.add_argument('--input', type=str, required=True, help='Path to the directory containing dataset')
-    parser.add_argument('--type', type=str, required=True, help='Type of model')
+    parser.add_argument('--type', type=str, required=False, help='Type of model')
     parser.add_argument('--model', type=str, required=True, help='Path to the directory containing weights of origin model')
     parser.add_argument('--forget-set', type=str, help='Path to the directory containing forget dataset')
 

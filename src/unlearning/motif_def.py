@@ -17,7 +17,7 @@ def discover_motifs_proxy(dataset, u, faulty_node_idx, threshold):
         forget_indices (list of lists): [[start, end], ...] of subsets similar with u
         retain_indices (list of lists): [[start, end], ...] of subsets not similar with u
     """
-    S = dataset[:, 1, :]
+    S = dataset[:, 0, :]
     _, time_step = S.shape
     forget_indices = []
     

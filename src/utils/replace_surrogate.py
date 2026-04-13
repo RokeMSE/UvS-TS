@@ -18,13 +18,13 @@ def replace_target(forget_target, surrogate, Df_indices, forget_indices, faulty_
                 local_end   = overlap_end   - global_target_start
                 
                 surrogate_offset = overlap_start - max(num_timesteps_input, f_start)
-                
+
                 values_to_paste = surrogate_seg[surrogate_offset : surrogate_offset + (local_end - local_start)]
-
-                new_forget_target[w, faulty_node_idx, local_start:local_end, :] = values_to_paste
-
-    
+                actual_len = values_to_paste.shape[0]
+                new_forget_target[w, faulty_node_idx, local_start:local_start+actual_len, :] = values_to_paste       
+        
     return new_forget_target
+
 
 
 def replace_dataset(dataset, surrogate, forget_indices, faultynode_idx, num_timestep_input, forget_output_mask):

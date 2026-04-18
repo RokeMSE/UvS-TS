@@ -26,7 +26,6 @@ def replace_target(forget_target, surrogate, Df_indices, forget_indices, faulty_
     return new_forget_target
 
 
-
 def replace_dataset(dataset, surrogate, forget_indices, faultynode_idx, num_timestep_input, forget_output_mask):
     new_dataset = dataset.copy()
     N, F, T = new_dataset.shape

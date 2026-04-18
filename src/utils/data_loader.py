@@ -31,4 +31,3 @@ def load_data_PEMS_BAY(file_path):
         raise
 
     return A, train, test, means, stds
-

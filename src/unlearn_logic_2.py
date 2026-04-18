@@ -514,6 +514,28 @@ class UvSTS:
                       f"forget_term={history['forget_term'][-1]:.4f}  "
                       f"ewc={history['ewc_penalty'][-1]:.4f}")
 
+        # ---- Post-training diagnostic: did the forget term ever fire? ----
+        if forget_loader_tr is not None and history["forget_loss"]:
+            max_lf = max(history["forget_loss"])
+            final_lf = history["forget_loss"][-1]
+            final_term = history["forget_term"][-1]
+            print(f"\n[DIAG] forget-set MSE  max={max_lf:.4f}  final={final_lf:.4f}  "
+                  f"margin={forget_margin}  final_term={final_term:.4f}")
+            if max_lf < forget_margin:
+                print(f"  WARNING: L_forget never reached margin ({forget_margin}). "
+                      f"Bounded ascent stayed active the whole run but produced no "
+                      f"forgetting above the target. Consider:")
+                print(f"    - raising --lambda-forget (current contribution may be "
+                      f"drowned by EWC / retain / surrogate terms)")
+                print(f"    - lowering --lambda-ewc (EWC pins params near original)")
+                print(f"    - lowering --forget-margin toward a realistic target "
+                      f"(e.g. 2-3x the original forget MSE)")
+            elif final_term > 0.0:
+                print(f"  NOTE: forget term still non-zero at end — more epochs may "
+                      f"continue pushing L_forget up.")
+            else:
+                print(f"  OK: L_forget reached margin and the bounded term saturated.")
+
         return history
 
 
@@ -550,7 +572,7 @@ def run(args):
         for key, value in forget_set_json.items():
             node_idx = int(key)
             for item in value:
-                forget_example = train_data[node_idx, 1, item[0]:item[1]]
+                forget_example = train_data[node_idx, 0, item[0]:item[1]]
             args.node_idx = node_idx
             break
 
@@ -607,9 +629,10 @@ def run(args):
     elapsed = start_evt.elapsed_time(end_evt) / 1000.0
 
     # Save
+    suffix = f"_{args.out_suffix}" if args.out_suffix else ""
     out_dir = os.path.join(
         args.model,
-        f"Unlearn_{'node' if args.unlearn_node else 'subset'}_{args.node_idx}",
+        f"Unlearn_{'node' if args.unlearn_node else 'subset'}_{args.node_idx}{suffix}",
     )
     os.makedirs(out_dir, exist_ok=True)
     torch.save(
@@ -669,10 +692,15 @@ def main():
     parser.add_argument("--lambda-surr", type=float, default=1.0)
     parser.add_argument("--lambda-retain", type=float, default=1.0)
     parser.add_argument("--lambda-ewc", type=float, default=5.0)
-    parser.add_argument("--lambda-forget", type=float, default=0.5)
-    parser.add_argument("--forget-margin", type=float, default=2.0,
+    parser.add_argument("--lambda-forget", type=float, default=2.0)
+    parser.add_argument("--forget-margin", type=float, default=0.5,
                         help="Bounded-ascent margin. Once L_forget exceeds "
-                             "this, the forget term stops contributing.")
+                             "this, the forget term stops contributing. "
+                             "Pick a realistic multiple of the original forget "
+                             "MSE — too high causes generalization collapse.")
+    parser.add_argument("--out-suffix", type=str, default="",
+                        help="Optional suffix appended to the output directory "
+                             "name (useful for hyperparameter sweeps).")
 
     args = parser.parse_args()
 

@@ -1,0 +1,31 @@
+-- Train: all model PEMSBAY
+python train.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/PEMS-BAY
+
+-- Train: all model METR-LA
+python train.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/METR-LA
+
+
+-- Run_baseline: all model, run subset in forget_set.json, for model PEMS-BAY
+python run_baselines.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/PEMS-BAY --run-retrain --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY/forget_set.json
+
+-- Run_baseline: all model, run subset in forget_set.json, for model METR-LA
+python run_baselines.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/METR-LA --run-retrain --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA/forget_set.json
+
+ 
+-- unlearn_2: all model, run subset in forget_set.json, for model PEMS-BAY
+python unlearn_2.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/PEMS-BAY --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY/forget_set.json
+
+ 
+-- unlearn_2: all model, run subset in forget_set.json, for model METR-LA
+python unlearn_2.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/METR-LA --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA/forget_set.json
+
+
+-- unlearn_3: all model, run subset in forget_set.json, for model PEMS-BAY
+python unlearn_3.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/PEMS-BAY --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/PEMS-BAY/forget_set.json
+
+ 
+-- unlearn_3: all model, run subset in forget_set.json, for model METR-LA
+python unlearn_3.py --enable-cuda --all --input /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA --model /user/cs.aau.dk/tungkvt/hung_quyen/Model/METR-LA --forget-set /user/cs.aau.dk/tungkvt/hung_quyen/Data/METR-LA/forget_set.json
+
+
+

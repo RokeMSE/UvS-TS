@@ -13,7 +13,7 @@ num_timesteps_input = 12
 num_timesteps_output = 4
 
 epochs = 100
-batch_size = 68
+batch_size = 128
 
 def train_epoch(model, A_wave, loss_criterion, optimizer, training_input, training_target, batch_size, device):
     """

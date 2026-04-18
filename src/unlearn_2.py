@@ -1,5 +1,5 @@
 """ Run the 3 Orders from the Initial Models using files from the unlearning folder
-- Combine Components: Load the pre-trained model ($Î¸*$).
+- Combine Components: Load the pre-trained model ($θ*$).
 - Partition Data: Use your PEPA implementation to get $D_f$ and $D_r$.
 - Calculate FIM: Compute the PA-FIM ($F^T$) using $D_r$ and your PA-EWC module. """
 import torch
@@ -358,7 +358,7 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
         history, retain_loader, forget_loader = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_set, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
-            threshold=0.5, num_epochs=100, learning_rate=1e-5,
+            threshold=5, num_epochs=100, learning_rate=1e-5,
             lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=64
         )
     end.record()
@@ -433,7 +433,7 @@ def main():
             # Only 1 element(subset on 1 node)
             node_idx = int(key)
             for item in value:
-                forget_set = train_original_data[node_idx, 1, item[0]:item[1]]
+                forget_set = train_original_data[node_idx, 0, item[0]:item[1]]
                 # forget_set = (forget_set - means[1]) / stds[1]
                 # forget_array.append(forget_set - means[1]) / stds[1]
 

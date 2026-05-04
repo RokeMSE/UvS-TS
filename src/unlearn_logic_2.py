@@ -75,6 +75,7 @@ from utils.filter_forget import filter_forget
 from utils.replace_surrogate import replace_target
 from data.preprocess_pemsbay import generate_dataset, get_normalized_adj
 from evaluate import evaluate_unlearning
+from retrain_baseline import retrain_from_scratch
 
 
 # ============================================================================
@@ -276,11 +277,15 @@ class UvSTS:
             raise ValueError(f"Unknown surrogate_mode: {surrogate_mode}")
 
         # ---- 7. Unified training loop ----
+        # Pass faulty_node_idx so the surrogate-slicing guard fires when
+        # 'self' mode emits (B, 1, T, F) surrogate targets; retain loss
+        # still runs over all nodes because mask_faulty_in_retain=False.
         history = self._training_loop(
             surrogate_loader, retain_loader, forget_loader_tr,
             num_epochs, learning_rate,
             lambda_ewc, lambda_surrogate, lambda_retain, lambda_forget,
-            forget_margin, faulty_node_idx=None,  # subset: loss over all nodes
+            forget_margin, faulty_node_idx=faulty_node_idx,
+            mask_faulty_in_retain=False,
         )
 
         return history, retain_loader, forget_loader_tr, forget_loader_eval
@@ -288,6 +293,31 @@ class UvSTS:
     # ==================================================================
     #  NODE UNLEARNING
     # ==================================================================
+    def _compute_leverage_scores(self, full_input, faulty_node_idx, batch_size):
+        """
+        Per-window leverage score for node v:
+            score(w) = mean( (f(A,w)[:,v] - f(A, mask_v(w))[:,v])^2 )
+        High score = v's own input is load-bearing for v's output in this
+        window. Used by node_mode='leverage' to prune D_f to high-influence
+        windows, cutting node-mode runtime without weakening the forget signal.
+        """
+        self.model.eval()
+        scores = torch.empty(full_input.shape[0], dtype=torch.float32)
+        with torch.no_grad():
+            for i in range(0, full_input.shape[0], batch_size):
+                X = full_input[i:i + batch_size].to(self.device)
+                pred_real = self.model(self.A_wave, X)[
+                    :, faulty_node_idx:faulty_node_idx + 1, :, :
+                ]
+                X_masked = X.clone()
+                X_masked[:, faulty_node_idx, :, :] = 0.0
+                pred_masked = self.model(self.A_wave, X_masked)[
+                    :, faulty_node_idx:faulty_node_idx + 1, :, :
+                ]
+                diff = (pred_real - pred_masked).pow(2).mean(dim=(1, 2, 3))
+                scores[i:i + diff.shape[0]] = diff.cpu()
+        return scores
+
     def unlearn_node(
         self,
         dataset,
@@ -301,28 +331,187 @@ class UvSTS:
         lambda_ewc=5.0,
         lambda_surrogate=1.0,
         lambda_retain=2.0,
-        lambda_forget=1.0,
-        forget_margin=2.0,
+        lambda_forget=1.0, # 1.0 is best
+        forget_margin=2.0, # 0.5 is best
         batch_size=256,
+        # ---- scope-narrowing controls (suggested in the methodology review) ----
+        node_mode="full",          # "full" | "leverage" | "motif"
+        leverage_keep=0.2,         # top fraction of windows kept in 'leverage' mode
+        motif_example=None,        # 1D array, faulty pattern on node v's series
+        motif_threshold=0.5,       # DTW threshold for 'motif' mode
     ):
-        """Node unlearning: remove an entire sensor's influence."""
-        print(f"\n[NODE] Starting on node {faulty_node_idx}")
+        """
+        Node unlearning: remove a sensor's influence from the model.
+
+        node_mode:
+            'full'     - paper-default. D_f = ALL windows × {node v}, graph
+                         isolated. Slow but matches the "sensor permanently
+                         removed" scenario.
+            'leverage' - same as 'full' but D_f is pruned to the top
+                         `leverage_keep` fraction of windows by influence
+                         score (windows where v's own input is load-bearing
+                         for v's output). Cuts wall-clock by ~1/leverage_keep
+                         without sacrificing forget signal.
+            'motif'    - "sensor went bad after date X" scenario. DTW finds
+                         windows whose v-series matches `motif_example`;
+                         D_f = those windows, D_r = the rest with v's data
+                         INTACT. Graph is NOT isolated, since v stays in
+                         operation outside the faulty period.
+        """
+        if node_mode not in ("full", "leverage", "motif"):
+            raise ValueError(f"Unknown node_mode: {node_mode}")
+        if node_mode == "motif" and motif_example is None:
+            raise ValueError("node_mode='motif' requires motif_example")
+
+        print(f"\n[NODE] Starting on node {faulty_node_idx}  mode={node_mode}")
 
         dataset = dataset.astype(np.float32)
 
-        # ---- 1. Isolate faulty node in adjacency BEFORE any forward pass ----
+        # ---- 1. Build windows ----
+        full_input, full_target = generate_dataset(
+            dataset, num_timesteps_input, num_timesteps_output
+        )
+
+        # ============================================================
+        #  Branch: motif-restricted scope (no graph isolation)
+        # ============================================================
+        if node_mode == "motif":
+            print(f"  motif DTW: threshold={motif_threshold}, "
+                  f"reference len={len(motif_example)}")
+            forget_intervals, _ = discover_motifs_proxy(
+                dataset, motif_example, faulty_node_idx, motif_threshold
+            )
+            if not forget_intervals:
+                print("  no faulty motifs found — aborting")
+                return None, None, None, None
+            print(f"  faulty intervals: {len(forget_intervals)}")
+
+            (retain_input, retain_target, _, forget_input,
+             forget_target_full, _) = filter_forget(
+                full_input, full_target, forget_intervals,
+                num_timesteps_input, num_timesteps_output,
+            )
+            # In motif mode the forget target is sliced to node v
+            forget_target = forget_target_full[
+                :, faulty_node_idx:faulty_node_idx + 1, :, :
+            ]
+            print(f"  retain windows: {len(retain_input)}  "
+                  f"forget windows: {len(forget_input)}")
+
+            # Surrogate: neighbor-informed but ONLY on the faulty windows
+            # (rest of v's history is kept intact via retain).
+            print("  generating neighbor-informed surrogate on faulty windows...")
+            masked_input = forget_input.clone()
+            masked_input[:, faulty_node_idx, :, :] = 0.0
+            self.model.eval()
+            surrogate_chunks = []
+            with torch.no_grad():
+                for i in range(0, masked_input.shape[0], batch_size):
+                    batch = masked_input[i:i + batch_size].to(self.device)
+                    out = self.model(self.A_wave, batch)
+                    surrogate_chunks.append(
+                        out[:, faulty_node_idx:faulty_node_idx + 1, :, :].cpu()
+                    )
+            surrogate_target = torch.cat(surrogate_chunks, dim=0)
+            surrogate_target = surrogate_target + (
+                torch.randn_like(surrogate_target) * 0.05
+                + torch.randn_like(surrogate_target) * 0.10
+            )
+
+            # NOTE: graph stays connected — v is still operational.
+            print("  graph isolation SKIPPED (motif mode)")
+
+            forget_loader_tr = DataLoader(
+                TensorDataset(forget_input, forget_target),
+                batch_size=batch_size, shuffle=True,
+            )
+            forget_loader_eval = DataLoader(
+                TensorDataset(forget_input, forget_target),
+                batch_size=batch_size, shuffle=False,
+            )
+            retain_loader = DataLoader(
+                TensorDataset(retain_input, retain_target),
+                batch_size=batch_size, shuffle=True,
+            )
+            surrogate_loader = DataLoader(
+                TensorDataset(masked_input, surrogate_target),
+                batch_size=batch_size, shuffle=True,
+            )
+
+            print("  computing PA-FIM on retain set (original graph)...")
+            self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
+                self.model, retain_loader, self.new_A_wave, max_samples=500
+            )
+
+            history = self._training_loop(
+                surrogate_loader, retain_loader, forget_loader_tr,
+                num_epochs, learning_rate,
+                lambda_ewc, lambda_surrogate, lambda_retain, lambda_forget,
+                forget_margin, faulty_node_idx=faulty_node_idx,
+                mask_faulty_in_retain=False,   # v is intact in retain
+            )
+            return history, retain_loader, forget_loader_tr, forget_loader_eval
+
+        # ============================================================
+        #  Modes 'full' and 'leverage' share the rest of the pipeline
+        # ============================================================
+
+        # ---- 2. Neighbor-informed surrogate BEFORE isolation ----
+        # Must happen before zeroing the faulty row/col of the adjacency and
+        # the gwnet nodevecs; otherwise the faulty node's output degenerates
+        # to ~0 and the "imputation" collapses to pure noise.
+        print("  generating neighbor-informed surrogate (pre-isolation)...")
+        masked_input = full_input.clone()
+        masked_input[:, faulty_node_idx, :, :] = 0.0
+
+        self.model.eval()
+        surrogate_chunks = []
+        with torch.no_grad():
+            for i in range(0, masked_input.shape[0], batch_size):
+                batch = masked_input[i:i + batch_size].to(self.device)
+                out = self.model(self.A_wave, batch)   # ORIGINAL adjacency
+                surrogate_chunks.append(
+                    out[:, faulty_node_idx:faulty_node_idx + 1, :, :].cpu()
+                )
+        surrogate_target = torch.cat(surrogate_chunks, dim=0)
+        # Multi-scale noise to prevent re-learning the original pattern
+        surrogate_target = surrogate_target + (
+            torch.randn_like(surrogate_target) * 0.05
+            + torch.randn_like(surrogate_target) * 0.10
+        )
+
+        # ---- 2b. Leverage-based subsampling of D_f (and matching surrogate) ----
+        keep_indices = None
+        if node_mode == "leverage":
+            print(f"  scoring window leverage for node {faulty_node_idx}...")
+            scores = self._compute_leverage_scores(
+                full_input, faulty_node_idx, batch_size
+            )
+            n_keep = max(1, int(round(leverage_keep * scores.shape[0])))
+            keep_indices = torch.topk(scores, n_keep).indices.sort().values
+            print(f"  leverage_keep={leverage_keep}  "
+                  f"kept {n_keep}/{scores.shape[0]} windows  "
+                  f"score range=[{scores[keep_indices].min().item():.4g}, "
+                  f"{scores[keep_indices].max().item():.4g}]")
+
+        # ---- 3. Isolate faulty node in adjacency / gwnet embeddings ----
         print(f"  isolating node {faulty_node_idx} in adjacency...")
         self.new_A_wave[faulty_node_idx, :] = 0.0
         self.new_A_wave[:, faulty_node_idx] = 0.0
         self._isolate_gwnet_node_embeddings(faulty_node_idx)
 
-        # ---- 2. Build loaders ----
-        full_input, full_target = generate_dataset(
-            dataset, num_timesteps_input, num_timesteps_output
-        )
+        # ---- 4. Build loaders ----
+        if keep_indices is not None:
+            forget_input = full_input[keep_indices].clone()
+            forget_target = full_target[keep_indices][
+                :, faulty_node_idx:faulty_node_idx + 1, :, :
+            ]
+            masked_input = masked_input[keep_indices]
+            surrogate_target = surrogate_target[keep_indices]
+        else:
+            forget_input = full_input.clone()
+            forget_target = full_target[:, faulty_node_idx:faulty_node_idx + 1, :, :]
 
-        forget_input = full_input.clone()
-        forget_target = full_target[:, faulty_node_idx:faulty_node_idx + 1, :, :]
         forget_loader_tr = DataLoader(
             TensorDataset(forget_input, forget_target),
             batch_size=batch_size, shuffle=True,
@@ -341,46 +530,27 @@ class UvSTS:
             batch_size=batch_size, shuffle=True,
         )
 
-        print(f"  retain windows: {len(retain_input)}  "
-              f"forget windows: {len(forget_input)}")
-
-        # ---- 3. FIM on retain set (isolated graph) ----
-        print("  computing PA-FIM on retain set (isolated graph)...")
-        self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
-            self.model, retain_loader, self.new_A_wave, max_samples=500
-        )
-
-        # ---- 4. Neighbor-informed surrogate ----
-        print("  generating surrogate via neighbor-informed imputation...")
-        masked_input = full_input.clone()
-        masked_input[:, faulty_node_idx, :, :] = 0.0
-
-        self.model.eval()
-        surrogate_targets = []
-        with torch.no_grad():
-            for i in range(0, masked_input.shape[0], batch_size):
-                batch = masked_input[i:i + batch_size].to(self.device)
-                out = self.model(self.new_A_wave, batch)
-                surrogate_targets.append(
-                    out[:, faulty_node_idx:faulty_node_idx + 1, :, :].cpu()
-                )
-        surrogate_target = torch.cat(surrogate_targets, dim=0)
-        # Multi-scale noise to prevent re-learning the original pattern
-        surrogate_target = surrogate_target + (
-            torch.randn_like(surrogate_target) * 0.05
-            + torch.randn_like(surrogate_target) * 0.10
-        )
         surrogate_loader = DataLoader(
             TensorDataset(masked_input, surrogate_target),
             batch_size=batch_size, shuffle=True,
         )
 
-        # ---- 5. Unified training loop ----
+        print(f"  retain windows: {len(retain_input)}  "
+              f"forget windows: {len(forget_input)}")
+
+        # ---- 5. FIM on retain set (isolated graph) ----
+        print("  computing PA-FIM on retain set (isolated graph)...")
+        self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
+            self.model, retain_loader, self.new_A_wave, max_samples=500
+        )
+
+        # ---- 6. Unified training loop ----
         history = self._training_loop(
             surrogate_loader, retain_loader, forget_loader_tr,
             num_epochs, learning_rate,
             lambda_ewc, lambda_surrogate, lambda_retain, lambda_forget,
             forget_margin, faulty_node_idx=faulty_node_idx,
+            mask_faulty_in_retain=True,
         )
 
         return history, retain_loader, forget_loader_tr, forget_loader_eval
@@ -401,6 +571,7 @@ class UvSTS:
         lambda_forget,
         forget_margin,
         faulty_node_idx=None,
+        mask_faulty_in_retain=False,
     ):
         """
         Shared loop for subset + node unlearning.
@@ -449,7 +620,7 @@ class UvSTS:
 
                 # ---- Retain loss ----
                 ret_pred = self.model(new_A, ret_X)
-                if faulty_node_idx is not None:
+                if mask_faulty_in_retain and faulty_node_idx is not None:
                     mask = torch.ones(N, dtype=torch.bool, device=self.device)
                     mask[faulty_node_idx] = False
                     l_retain = mse(ret_pred[:, mask, :, :], ret_y[:, mask, :, :])
@@ -564,17 +735,36 @@ def run(args):
     A_wave = get_normalized_adj(A)
     A_wave = torch.from_numpy(A_wave).float().to(args.device)
 
-    # Extract forget example for subset mode
+    # Extract forget example for subset mode (and node-mode='motif').
+    # In subset mode the JSON's node id overrides args.node_idx; in node-mode
+    # 'motif' the user has already pinned --node-idx, so we keep that but pull
+    # the example slice from THAT node's series.
     forget_example = None
-    if not args.unlearn_node:
+    needs_forget_set = (not args.unlearn_node) or (
+        args.unlearn_node and args.node_mode == "motif"
+    )
+    if needs_forget_set:
         with open(args.forget_set, "r", encoding="utf8") as f:
             forget_set_json = json.load(f)
-        for key, value in forget_set_json.items():
-            node_idx = int(key)
-            for item in value:
-                forget_example = train_data[node_idx, 0, item[0]:item[1]]
-            args.node_idx = node_idx
-            break
+        if args.unlearn_node:
+            node_for_motif = args.node_idx
+            entries = forget_set_json.get(str(node_for_motif))
+            if not entries:
+                # fall back to the first available entry
+                first_key = next(iter(forget_set_json))
+                node_for_motif = int(first_key)
+                entries = forget_set_json[first_key]
+                print(f"  [motif] no entry for node {args.node_idx} in "
+                      f"forget-set; using node {node_for_motif} as reference")
+            item = entries[0]
+            forget_example = train_data[node_for_motif, 0, item[0]:item[1]]
+        else:
+            for key, value in forget_set_json.items():
+                node_idx = int(key)
+                for item in value:
+                    forget_example = train_data[node_idx, 0, item[0]:item[1]]
+                args.node_idx = node_idx
+                break
 
     # Load trained model
     ckpt_path = os.path.join(args.model, f"{args.type}_model.pt")
@@ -608,7 +798,14 @@ def run(args):
             lambda_ewc=args.lambda_ewc, lambda_surrogate=args.lambda_surr,
             lambda_retain=args.lambda_retain, lambda_forget=args.lambda_forget,
             forget_margin=args.forget_margin, batch_size=args.batch_size,
+            node_mode=args.node_mode,
+            leverage_keep=args.leverage_keep,
+            motif_example=forget_example,
+            motif_threshold=args.threshold,
         )
+        if history is None:
+            print("Nothing to unlearn (no faulty motifs found). Exiting.")
+            return
     else:
         result = framework.unlearn_subset(
             train_data, forget_example, args.node_idx, means, stds,
@@ -641,6 +838,25 @@ def run(args):
         os.path.join(out_dir, f"{args.type}_unlearned.pt"),
     )
 
+    # Optional: retrain-from-scratch gold-standard baseline.
+    # NODE mode masks the faulty node in retain-loss (matches training). SUBSET
+    # mode does not (retain_loader is already forget-window-filtered).
+    mask_faulty = bool(args.unlearn_node)
+    model_retrained = None
+    if args.retrain_baseline:
+        print("\n[RETRAIN] training gold-standard baseline from scratch on retain loader...")
+        model_retrained = retrain_from_scratch(
+            model_type=args.type,
+            config=config,
+            retain_loader=retain_loader,
+            A_wave=framework.new_A_wave,
+            device=args.device,
+            epochs=args.retrain_epochs,
+            lr=args.retrain_lr,
+            faulty_node_idx=args.node_idx if args.unlearn_node else None,
+            mask_faulty_in_retain=mask_faulty,
+        )
+
     # Evaluate using the CLEAN eval forget loader
     print("\n[EVAL] evaluating unlearned model...")
     results = evaluate_unlearning(
@@ -653,6 +869,9 @@ def run(args):
         A_wave=A_wave,
         device=args.device,
         faulty_node_idx=args.node_idx if args.unlearn_node else None,
+        mask_faulty_in_retain=mask_faulty,
+        model_retrained=model_retrained,
+        forget_margin=args.forget_margin,
     )
     results["time"] = elapsed
 
@@ -683,6 +902,20 @@ def main():
                         choices=["patch", "self"],
                         help="'patch' (default, recommended) or 'self' (legacy)")
 
+    # Node-mode scope-narrowing (no-op in subset mode)
+    parser.add_argument("--node-mode", type=str, default="full",
+                        choices=["full", "leverage", "motif"],
+                        help="Node-unlearning scope. 'full' (paper default) "
+                             "uses every window. 'leverage' keeps the top "
+                             "--leverage-keep fraction of windows by influence "
+                             "score (faster, same isolation). 'motif' uses DTW "
+                             "to find faulty windows on node v's series, does "
+                             "NOT isolate the graph, and keeps v intact in "
+                             "retain — for the 'sensor went bad' scenario.")
+    parser.add_argument("--leverage-keep", type=float, default=0.2,
+                        help="Top fraction of windows to keep as D_f when "
+                             "--node-mode=leverage (default 0.2 = top 20%%).")
+
     # Hyperparameters
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -702,13 +935,28 @@ def main():
                         help="Optional suffix appended to the output directory "
                              "name (useful for hyperparameter sweeps).")
 
+    # Retrain-from-scratch baseline (gold standard for unlearning eval).
+    parser.add_argument("--retrain-baseline", action="store_true",
+                        help="Train a fresh model on the retain loader and "
+                             "report gap-to-retrain metrics. Expensive but "
+                             "produces the defensible unlearning signal.")
+    parser.add_argument("--retrain-epochs", type=int, default=100)
+    parser.add_argument("--retrain-lr", type=float, default=1e-3)
+
     args = parser.parse_args()
 
     if args.unlearn_node:
         if args.node_idx is None:
             parser.error("--node-idx required with --unlearn-node")
-        if args.forget_set is not None:
-            print("Warning: --forget-set ignored in node mode")
+        if args.node_mode == "motif":
+            if args.forget_set is None:
+                parser.error("--forget-set required when --node-mode=motif "
+                             "(provides the reference faulty motif)")
+        elif args.forget_set is not None:
+            print("Warning: --forget-set ignored in node mode "
+                  f"(--node-mode={args.node_mode})")
+        if not 0.0 < args.leverage_keep <= 1.0:
+            parser.error("--leverage-keep must be in (0, 1]")
     else:
         if args.forget_set is None:
             parser.error("--forget-set required unless --unlearn-node is set")

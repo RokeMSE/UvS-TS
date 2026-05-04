@@ -38,18 +38,41 @@ def parse_eval(path):
     return out
 
 
-def composite_score(r):
+_REF_KEYS = ("forget_set_mse", "retain_set_mse", "test_set_mse")
+
+
+def composite_score(r, retrain=None):
     """
-    Higher is better. Capped forgetting gain minus drift penalties.
-      - forgetting_efficacy > 1 is rewarded, capped at +3 so one huge run
-        can't win purely on overshoot
-      - |fidelity_score - 1| and |generalization_score - 1| are penalties
-        (generalization is weighted more heavily)
+    Higher is better. Two modes:
+
+    (a) Reference mode — if a retrain dict is provided, rank by relative
+        distance to the retrain baseline across forget/retain/test MSE:
+            score = -sum_m |r[m] - retrain[m]| / retrain[m]
+        This is the right objective for unlearning: retrain is the gold
+        standard and we want the closest match, not an overshoot.
+
+    (b) Heuristic mode — no retrain reference available. Hard-gate models
+        whose generalization drifts more than 30% (they are broken, not
+        unlearned), then reward small forget-eff gains with a quadratic
+        penalty on gen drift so one big overshoot can't win:
+            if |gen - 1| > 0.3: -inf
+            else: min(max(forget_eff - 1, 0), 1.0) - 3.0 * (gen - 1)^2
     """
-    f_gain = min(max(r["forgetting_efficacy"] - 1.0, 0.0), 3.0)
-    gen_cost = abs(r["generalization_score"] - 1.0)
-    fid_cost = abs(r["fidelity_score"] - 1.0)
-    return f_gain - 0.6 * gen_cost - 0.25 * fid_cost
+    if retrain is not None:
+        total = 0.0
+        for key in _REF_KEYS:
+            ref = retrain.get(key)
+            if not ref:
+                continue
+            total += abs(r[key] - ref) / ref
+        return -total
+
+    gen = r["generalization_score"]
+    if abs(gen - 1.0) > 0.3:
+        return float("-inf")
+    f_gain = min(max(r["forgetting_efficacy"] - 1.0, 0.0), 1.0)
+    gen_penalty = (gen - 1.0) ** 2
+    return f_gain - 3.0 * gen_penalty
 
 
 def find_run_dir(model_dir, tag):
@@ -78,7 +101,26 @@ def main():
     p.add_argument("--lambda-ewc", type=float, default=5.0)
     p.add_argument("--lambda-surr", type=float, default=1.0)
     p.add_argument("--lambda-retain", type=float, default=1.0)
+    p.add_argument("--retrain-forget-mse", type=float, default=None,
+                   help="Retrain baseline forget_set_mse. If all three "
+                        "--retrain-*-mse flags are set, ranking switches to "
+                        "distance-to-retrain mode.")
+    p.add_argument("--retrain-retain-mse", type=float, default=None)
+    p.add_argument("--retrain-test-mse", type=float, default=None)
     args = p.parse_args()
+
+    retrain_ref = None
+    retrain_vals = (args.retrain_forget_mse, args.retrain_retain_mse,
+                    args.retrain_test_mse)
+    if all(v is not None for v in retrain_vals):
+        retrain_ref = {
+            "forget_set_mse": args.retrain_forget_mse,
+            "retain_set_mse": args.retrain_retain_mse,
+            "test_set_mse": args.retrain_test_mse,
+        }
+        print(f"Ranking mode: distance-to-retrain (ref={retrain_ref})")
+    else:
+        print("Ranking mode: heuristic (no retrain reference provided)")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     unlearn_script = os.path.join(script_dir, "unlearn_logic_2.py")
@@ -131,7 +173,7 @@ def main():
 
         metrics["_lambda_forget"] = lf
         metrics["_forget_margin"] = fm
-        metrics["_score"] = composite_score(metrics)
+        metrics["_score"] = composite_score(metrics, retrain=retrain_ref)
         metrics["_dir"] = out_dir
         runs.append(metrics)
 

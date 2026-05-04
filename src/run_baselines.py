@@ -47,8 +47,9 @@ def prepare_data_loaders(train, test, A, args, num_timesteps_input, num_timestep
         new_A_wave = torch.from_numpy(new_A_wave).float()
         
         # Retain Set = Train Set
-        forget_input = train_input[:, faulty_node_idx:faulty_node_idx+1, :, :]
-        forget_target = train_target[:, faulty_node_idx:faulty_node_idx+1, :, :]    
+        forget_input = train_input.clone()                                          # full N
+        forget_target = train_target[:, faulty_node_idx:faulty_node_idx+1, :, :]    # N=1
+  
 
         # --- Retain set = mask faulty node ---
         retain_input = train_input.clone()
@@ -116,7 +117,24 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     
     # Determine node to unlearn (if any)
     faulty_node_idx = args.node_idx if args.unlearn_node else None
-    
+
+    num_nodes = A_wave.shape[-1]
+    print(f"[guard] num_nodes={num_nodes} | args.node_idx={args.node_idx} | faulty_node_idx={faulty_node_idx}")
+    if args.node_idx is not None:
+        idx = int(args.node_idx)
+        if idx < 0 or idx >= num_nodes:
+            raise ValueError(
+                f"args.node_idx={idx} is out of range for num_nodes={num_nodes} "
+                f"(valid: [0, {num_nodes - 1}])"
+            )
+    if faulty_node_idx is not None:
+        idx = int(faulty_node_idx)
+        if idx < 0 or idx >= num_nodes:
+            raise ValueError(
+                f"faulty_node_idx={idx} is out of range for num_nodes={num_nodes} "
+                f"(valid: [0, {num_nodes - 1}])"
+            )
+
     # 1. Retrain from Scratch (Gold Standard)
     if args.run_retrain:
         print("\n" + "="*80)
@@ -327,7 +345,7 @@ def run_baselines(args, model_class, original_model, raw_config, loaders, A_wave
     
     generate_comparison_report(all_results, args)
     
-    save_dir = os.path.join(args.model, f"baselines_node__{args.type}_{args.node_idx}")
+    save_dir = os.path.join(args.model, f"baselines_node_{args.type}_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     
     for name, model in all_models.items():
@@ -435,12 +453,14 @@ def main():
         
         num_timesteps_input = raw_config.get("nums_step_in", 12)
         num_timesteps_output = raw_config.get("nums_step_out", 4)
-        
-        # Read forget_set
-        with open(args.forget_set, 'r', encoding='utf8') as f:
-            forget_set_json = json.load(f)
-            
-        
+
+        # Read forget_set (only needed for subset unlearning)
+        forget_set_json = None
+        if not args.unlearn_node:
+            with open(args.forget_set, 'r', encoding='utf8') as f:
+                forget_set_json = json.load(f)
+
+
         print("Preparing data loaders...")
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
@@ -454,9 +474,9 @@ def main():
 
         time_gen_loader = start.elapsed_time(end) / 1000
 
-        
+
         run_baselines(args, model_class, original_model, raw_config, loaders, loaders['new_A_wave'], time_gen_loader)
-        
+
         print("\n" + "="*80)
         print("BASELINE COMPARISON COMPLETED!")
         print("="*80)
@@ -492,12 +512,14 @@ def main():
                 k: v.float() for k, v in checkpoint["model_state_dict"].items()
             })
             
-            num_timesteps_input = raw_config.get("nums_timestep_in", 12)
+            num_timesteps_input = raw_config.get("nums_step_in", 12)
             num_timesteps_output = raw_config.get("nums_step_out", 4)
-            
-            # Read forget_set
-            with open(args.forget_set, 'r', encoding='utf8') as f:
-                forget_set_json = json.load(f)
+
+            # Read forget_set (only needed for subset unlearning)
+            forget_set_json = None
+            if not args.unlearn_node:
+                with open(args.forget_set, 'r', encoding='utf8') as f:
+                    forget_set_json = json.load(f)
                 
             
             print("Preparing data loaders...")

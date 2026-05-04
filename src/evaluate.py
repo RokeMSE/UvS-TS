@@ -2,22 +2,29 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from unlearning.pa_ewc import PopulationAwareEWC
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from typing import Dict, Tuple
+from sklearn.metrics import mean_absolute_error, mean_squared_error, roc_auc_score
+from typing import Dict, Tuple, Optional
 import numpy as np
 
-def get_model_predictions(model: nn.Module, data_loader: DataLoader, 
-                         A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Get model predictions """
+def get_model_predictions(model: nn.Module, data_loader: DataLoader,
+                         A_wave: torch.Tensor, device: str, faulty_node_idx: int = None,
+                         mask_faulty_node: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Get model predictions.
+
+    mask_faulty_node: when True AND faulty_node_idx is set AND both output and
+    target contain all nodes, drop the faulty node from both tensors. Use this
+    for retain-set metrics in NODE unlearning mode, where training zeroed the
+    faulty node's row in the retain target — including it would score the model
+    on predicting zeros rather than on retain performance.
+    """
     model.eval()
     predictions = []
     ground_truth = []
-    
-    # Ensure A_wave is on the correct device and is a tensor
+
     if isinstance(A_wave, np.ndarray):
         A_wave = torch.from_numpy(A_wave).float()
     A_wave = A_wave.to(device)
-    
+
     with torch.no_grad():
         for batch_data in data_loader:
             if isinstance(batch_data, (list, tuple)):
@@ -25,28 +32,32 @@ def get_model_predictions(model: nn.Module, data_loader: DataLoader,
             else:
                 X_batch = batch_data
                 y_batch = batch_data
-                
+
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
-            
-            # Ensure X_batch is 4D for STGCN: (B, N, T, F)
+
             if X_batch.dim() == 3:
                 X_batch = X_batch.unsqueeze(-1)
-            
-            # Get model output - always use forward() with A_wave
+
             output = model(A_wave, X_batch)
 
-            # If evaluating a single node, slice the output to match the ground truth shape
             if faulty_node_idx is not None and y_batch.shape[1] == 1 and output.shape[1] > 1:
                 output = output[:, faulty_node_idx:faulty_node_idx+1, :, :]
-            
+            elif (mask_faulty_node and faulty_node_idx is not None
+                  and output.shape[1] > 1 and y_batch.shape[1] == output.shape[1]):
+                N = output.shape[1]
+                keep = torch.arange(N, device=output.device) != faulty_node_idx
+                output = output[:, keep, :, :]
+                y_batch = y_batch[:, keep, :, :]
+
             predictions.append(output.cpu())
             ground_truth.append(y_batch.cpu())
-            
+
     return torch.cat(predictions), torch.cat(ground_truth)
 
 def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader,
-                   new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
+                   new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None,
+                   mask_faulty_in_retain: bool = False):
     """
     Measure performance preservation on the retain set.
     Convention: mse_unlearned / mse_original.
@@ -54,19 +65,28 @@ def fidelity_score(model_unlearned: nn.Module, model_original: nn.Module, retain
       > 1.0 = retain-set degraded (bad)
       < 1.0 = retain-set improved (unusual, check for data leakage)
     """
-    preds_unlearned, truth = get_model_predictions(model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx)
-    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device, faulty_node_idx)
+    preds_unlearned, truth = get_model_predictions(
+        model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx,
+        mask_faulty_node=mask_faulty_in_retain,
+    )
+    preds_original, _ = get_model_predictions(
+        model_original, retain_loader, A_wave, device, faulty_node_idx,
+        mask_faulty_node=mask_faulty_in_retain,
+    )
 
     mse_unlearned = mean_squared_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     mse_original = mean_squared_error(truth.numpy().flatten(), preds_original.numpy().flatten())
 
     return mse_unlearned / (mse_original + 1e-8)
 
-def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, forget_loader: DataLoader, 
+def forgetting_efficacy(model_unlearned: nn.Module, model_original: nn.Module, forget_loader: DataLoader,
                         new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
     """
-    Measure how much the model has forgotten the forget set.
-    Higher is better (unlearned model has a much higher error).
+    Unbounded forget-MSE ratio (kept for backward compatibility only).
+
+    NOTE: this metric's "higher is better" convention contradicts the bounded
+    margin-ascent objective the training loop actually optimises. Use
+    `forget_margin_achievement` as the primary forgetting signal.
     Returns the relative increase in MSE on the forget set.
     """
     preds_unlearned, truth = get_model_predictions(model_unlearned, forget_loader, new_A_wave, device, faulty_node_idx)
@@ -95,15 +115,22 @@ def generalization_score(model_unlearned: nn.Module, model_original: nn.Module, 
 
     return mse_unlearned / (mse_original + 1e-8)
 
-def statistical_distance(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader, 
-                         new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None):
+def statistical_distance(model_unlearned: nn.Module, model_original: nn.Module, retain_loader: DataLoader,
+                         new_A_wave: torch.Tensor, A_wave: torch.Tensor, device: str, faulty_node_idx: int = None,
+                         mask_faulty_in_retain: bool = False):
     """
     Measure the statistical similarity between the original and unlearned models on the retain set.
     Lower is better.
     """
     pa_ewc = PopulationAwareEWC(device=device)
-    preds_unlearned, _ = get_model_predictions(model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx)
-    preds_original, _ = get_model_predictions(model_original, retain_loader, A_wave, device, faulty_node_idx)
+    preds_unlearned, _ = get_model_predictions(
+        model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx,
+        mask_faulty_node=mask_faulty_in_retain,
+    )
+    preds_original, _ = get_model_predictions(
+        model_original, retain_loader, A_wave, device, faulty_node_idx,
+        mask_faulty_node=mask_faulty_in_retain,
+    )
     
     # Calculate the L_pop loss between the two distributions of predictions
     return pa_ewc.calculate_L_pop(preds_unlearned, preds_original).item()
@@ -232,13 +259,42 @@ def forget_set_mse(model_unlearned: nn.Module, forget_loader: DataLoader,
     return mse
 
 
+def forget_margin_achievement(model_unlearned: nn.Module, forget_loader: DataLoader,
+                               new_A_wave: torch.Tensor, device: str,
+                               forget_margin: float,
+                               faulty_node_idx: int = None) -> float:
+    """
+    Margin-achievement indicator aligned with the method's bounded ascent.
+
+    The training loop uses max(0, margin - L_forget) so it stops pushing once
+    forget MSE reaches `forget_margin`. A useful metric therefore caps at the
+    target instead of rewarding unbounded ascent:
+
+        min(forget_mse, forget_margin) / forget_margin
+
+      1.0  = forget MSE reached or exceeded the target (ideal)
+      <1.0 = undershoot — forgetting incomplete relative to the stated goal
+
+    Pair with `forget_set_mse` to see the raw value and whether the margin was
+    set realistically.
+    """
+    if forget_margin is None or forget_margin <= 0:
+        return float("nan")
+    mse = forget_set_mse(model_unlearned, forget_loader, new_A_wave, device, faulty_node_idx)
+    return float(min(mse, forget_margin) / forget_margin)
+
+
 def retain_set_mse(model_unlearned: nn.Module, retain_loader: DataLoader,
-                   new_A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> float:
+                   new_A_wave: torch.Tensor, device: str, faulty_node_idx: int = None,
+                   mask_faulty_in_retain: bool = False) -> float:
     """
     Direct MSE on the retain set.
     Lower is better (good predictions on retain data).
     """
-    preds_unlearned, truth = get_model_predictions(model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx)
+    preds_unlearned, truth = get_model_predictions(
+        model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx,
+        mask_faulty_node=mask_faulty_in_retain,
+    )
     
     mse = mean_squared_error(truth.numpy().flatten(), preds_unlearned.numpy().flatten())
     return mse
@@ -308,11 +364,81 @@ def graph_structure_impact(model_unlearned: nn.Module, forget_loader: DataLoader
     return avg_error_new / (avg_error_old + 1e-8)
 
 
+def _per_sample_losses(model: nn.Module, data_loader: DataLoader,
+                        A_wave: torch.Tensor, device: str,
+                        faulty_node_idx: int = None) -> np.ndarray:
+    """Per-sample MSE under model. If faulty_node_idx is set and the target is
+    full-node, losses are computed on the faulty node only so member and
+    non-member distributions in MIA are directly comparable."""
+    model.eval()
+    A_wave = A_wave.to(device)
+    losses = []
+    with torch.no_grad():
+        for batch_data in data_loader:
+            if isinstance(batch_data, (list, tuple)):
+                X_batch, y_batch = batch_data
+            else:
+                X_batch = batch_data
+                y_batch = batch_data
+
+            X_batch = X_batch.to(device)
+            y_batch = y_batch.to(device)
+            if X_batch.dim() == 3:
+                X_batch = X_batch.unsqueeze(-1)
+
+            out = model(A_wave, X_batch)
+
+            if faulty_node_idx is not None and out.shape[1] > 1:
+                out = out[:, faulty_node_idx:faulty_node_idx+1, :, :]
+                if y_batch.shape[1] > 1:
+                    y_batch = y_batch[:, faulty_node_idx:faulty_node_idx+1, :, :]
+
+            diff = (out - y_batch) ** 2
+            per_sample = diff.reshape(diff.shape[0], -1).mean(dim=1)
+            losses.append(per_sample.cpu().numpy())
+    return np.concatenate(losses) if losses else np.array([])
+
+
+def membership_inference_auc(model: nn.Module, member_loader: DataLoader,
+                              nonmember_loader: DataLoader, A_wave: torch.Tensor,
+                              device: str, faulty_node_idx: int = None) -> float:
+    """
+    Threshold-based loss MIA.
+
+    Under the null (model has no membership signal) the forget-set loss
+    distribution should match a held-out non-member loss distribution and
+    a classifier that scores samples by -loss should achieve AUC ~ 0.5.
+    A well-unlearned model should approach 0.5; a model that still memorises
+    forget data will be > 0.5.
+
+    Compare unlearned AUC to the original model's AUC: the delta is the
+    unlearning's privacy effect.
+    """
+    member_losses = _per_sample_losses(model, member_loader, A_wave, device, faulty_node_idx)
+    nonmember_losses = _per_sample_losses(model, nonmember_loader, A_wave, device, faulty_node_idx)
+
+    if len(member_losses) == 0 or len(nonmember_losses) == 0:
+        return 0.5
+
+    scores = np.concatenate([-member_losses, -nonmember_losses])
+    labels = np.concatenate([np.ones(len(member_losses)), np.zeros(len(nonmember_losses))])
+
+    if len(np.unique(labels)) < 2:
+        return 0.5
+    try:
+        return float(roc_auc_score(labels, scores))
+    except ValueError:
+        return 0.5
+
+
 # --------- Main evaluation function -----------
-def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module, 
-                       retain_loader: DataLoader, forget_loader: DataLoader, 
-                       test_loader: DataLoader, new_A_wave: torch.Tensor, 
-                       A_wave: torch.Tensor, device: str, faulty_node_idx: int = None) -> Dict[str, float]:
+def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module,
+                       retain_loader: DataLoader, forget_loader: DataLoader,
+                       test_loader: DataLoader, new_A_wave: torch.Tensor,
+                       A_wave: torch.Tensor, device: str, faulty_node_idx: int = None,
+                       mask_faulty_in_retain: bool = False,
+                       model_retrained: Optional[nn.Module] = None,
+                       forget_margin: Optional[float] = None) -> Dict[str, float]:
     """
     Comprehensive evaluation for ST-GNN unlearning.
 
@@ -333,22 +459,30 @@ def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module,
     - Graph Structure Impact  ratio with modified vs original graph  higher is better
     """
     results = {}
-    
-    # Original metrics (ratios)
+
+    # Original metrics (ratios) — retain-side metrics honour mask_faulty_in_retain
     results["fidelity_score"] = fidelity_score(
-        model_unlearned, model_original, retain_loader, new_A_wave, A_wave, device, faulty_node_idx
+        model_unlearned, model_original, retain_loader, new_A_wave, A_wave, device,
+        faulty_node_idx, mask_faulty_in_retain=mask_faulty_in_retain,
     )
-    
+
     results["forgetting_efficacy"] = forgetting_efficacy(
         model_unlearned, model_original, forget_loader, new_A_wave, A_wave, device, faulty_node_idx
     )
-    
+
+    # Primary forgetting signal, aligned with the bounded margin-ascent objective.
+    if forget_margin is not None:
+        results["forget_margin_achievement"] = forget_margin_achievement(
+            model_unlearned, forget_loader, new_A_wave, device, forget_margin, faulty_node_idx
+        )
+
     results["generalization_score"] = generalization_score(
         model_unlearned, model_original, test_loader, new_A_wave, A_wave, device
     )
-    
+
     results["statistical_distance"] = statistical_distance(
-        model_unlearned, model_original, retain_loader, new_A_wave, A_wave, device, faulty_node_idx
+        model_unlearned, model_original, retain_loader, new_A_wave, A_wave, device,
+        faulty_node_idx, mask_faulty_in_retain=mask_faulty_in_retain,
     )
     
     # New spatio-temporal specific metrics
@@ -370,17 +504,70 @@ def evaluate_unlearning(model_unlearned: nn.Module, model_original: nn.Module,
     )
     
     results["retain_set_mse"] = retain_set_mse(
-        model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx
+        model_unlearned, retain_loader, new_A_wave, device, faulty_node_idx,
+        mask_faulty_in_retain=mask_faulty_in_retain,
     )
-    
+
     results["test_set_mse"] = test_set_mse(
         model_unlearned, test_loader, new_A_wave, device
     )
-    
+
     # Graph structure impact (only for node unlearning)
     if faulty_node_idx is not None:
         results["graph_structure_impact"] = graph_structure_impact(
             model_unlearned, forget_loader, new_A_wave, A_wave, device, faulty_node_idx
         )
-    
+
+    # ---- MIA: loss-threshold attack using forget as members, test as non-members ----
+    # For node mode, per-sample losses are restricted to the faulty node so member
+    # and non-member distributions are comparable.
+    mia_node = faulty_node_idx if faulty_node_idx is not None else None
+    results["mia_auc_original"] = membership_inference_auc(
+        model_original, forget_loader, test_loader, A_wave, device, mia_node
+    )
+    results["mia_auc_unlearned"] = membership_inference_auc(
+        model_unlearned, forget_loader, test_loader, new_A_wave, device, mia_node
+    )
+    # How much closer to 0.5 (no membership signal) the unlearned model is.
+    # Positive = unlearning reduced the membership signal (good).
+    results["mia_auc_reduction"] = (
+        abs(results["mia_auc_original"] - 0.5) - abs(results["mia_auc_unlearned"] - 0.5)
+    )
+
+    # ---- Retrain-from-scratch gap metrics ----
+    # The retrained model is the "gold standard". A successful unlearned model
+    # behaves like this reference on each metric — so we report the absolute
+    # gap per metric. Closer to 0 is better.
+    if model_retrained is not None:
+        retrain_retain = retain_set_mse(
+            model_retrained, retain_loader, new_A_wave, device, faulty_node_idx,
+            mask_faulty_in_retain=mask_faulty_in_retain,
+        )
+        retrain_forget = forget_set_mse(
+            model_retrained, forget_loader, new_A_wave, device, faulty_node_idx
+        )
+        retrain_test = test_set_mse(
+            model_retrained, test_loader, new_A_wave, device
+        )
+        retrain_mia = membership_inference_auc(
+            model_retrained, forget_loader, test_loader, new_A_wave, device, mia_node
+        )
+
+        results["retrain_retain_mse"] = retrain_retain
+        results["retrain_forget_mse"] = retrain_forget
+        results["retrain_test_mse"] = retrain_test
+        results["retrain_mia_auc"] = retrain_mia
+
+        results["gap_retain_mse"] = abs(results["retain_set_mse"] - retrain_retain)
+        results["gap_forget_mse"] = abs(results["forget_set_mse"] - retrain_forget)
+        results["gap_test_mse"] = abs(results["test_set_mse"] - retrain_test)
+        results["gap_mia_auc"] = abs(results["mia_auc_unlearned"] - retrain_mia)
+
+        # Parameter-space distance: ||theta_u - theta_r|| / ||theta_o - theta_r||
+        # <1.0 = unlearning moved params toward retrain (good)
+        from retrain_baseline import parameter_distance_ratio
+        results["param_distance_ratio"] = parameter_distance_ratio(
+            model_unlearned, model_retrained, model_original
+        )
+
     return results

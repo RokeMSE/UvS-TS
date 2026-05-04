@@ -89,6 +89,7 @@ class SATimeSeries:
         retain_input, retain_target, Dr_indices, forget_input, forget_target, Df_indices = filter_forget(train_input, train_target, forget_indices, num_timesteps_input, num_timesteps_output)
 
         retain_loader = DataLoader(TensorDataset(retain_input, retain_target), batch_size=batch_size, shuffle=True)
+        forget_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
 
         output_start = window_starts + num_timesteps_input
         output_times = output_start.unsqueeze(1) + torch.arange(num_timesteps_output).unsqueeze(0)
@@ -111,11 +112,9 @@ class SATimeSeries:
         )
         
         forget_target = replace_target(forget_target, surrogate_data, Df_indices, forget_indices, faulty_node_idx, num_timesteps_input)
-        forget_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
-
+        surrogate_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
         
-        
-        history = self.training(forget_loader, retain_loader, A_wave, 
+        history = self.training(surrogate_loader, retain_loader, A_wave, 
                                 num_epochs, learning_rate,
                                 lambda_ewc, lambda_surrogate, lambda_retain)
         
@@ -126,129 +125,101 @@ class SATimeSeries:
         return history, retain_loader, forget_loader
     
     
-    def unlearn_faulty_node(self, dataset, faulty_node_idx, A_wave, means, stds, 
-                        num_timesteps_input, num_timesteps_output, top_k_node=1,
-                        num_epochs=50, learning_rate=5e-5, 
-                        lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=512):
-        
+    def _isolate_gwnet_node_embeddings(self, faulty_node_idx):
+        """Zero the adaptive-adjacency embeddings for the faulty node so
+        Graph WaveNet cannot recover its influence via the learned path."""
+        if not isinstance(self.model, gwnet):
+            return
+        with torch.no_grad():
+            if hasattr(self.model, "nodevec1") and self.model.nodevec1 is not None:
+                self.model.nodevec1.data[faulty_node_idx, :] = 0.0
+            if hasattr(self.model, "nodevec2") and self.model.nodevec2 is not None:
+                self.model.nodevec2.data[:, faulty_node_idx] = 0.0
+        print(f"  [gwnet] zeroed nodevec1[{faulty_node_idx},:] and nodevec2[:,{faulty_node_idx}]")
+
+    def unlearn_faulty_node(self, dataset, faulty_node_idx, A_wave, means, stds,
+                            num_timesteps_input, num_timesteps_output,
+                            num_epochs=100, learning_rate=1e-4,
+                            lambda_ewc=5.0, lambda_surrogate=1.0, lambda_retain=2.0,
+                            batch_size=128):
+        """Node unlearning: remove a sensor's influence from the model."""
+        print(f"Starting node unlearning for node {faulty_node_idx}")
         dataset = dataset.astype(np.float32)
-        threshold = 1e-6
 
-        # Get real neighbour node
-        row = A_wave[faulty_node_idx].clone().flatten()
-        row[faulty_node_idx] = float('-inf')  # remove self-loop
-        out_mask = row.abs() > threshold
-        out_indices = torch.nonzero(out_mask, as_tuple=False).squeeze()
-        out_values = row[out_mask]
-        if out_values.numel() > 0:
-            out_vals, out_idx = torch.topk(out_values, min(top_k_node, out_values.size(0)))
-            out_nodes = out_indices[out_idx]
-        else:
-            out_nodes, out_vals = torch.tensor([]), torch.tensor([])
+        # --- 1. Isolate the faulty node in the adjacency BEFORE any forward pass ---
+        print(f"Isolating node {faulty_node_idx} in adjacency...")
+        self.new_A_wave[faulty_node_idx, :] = 0.0
+        self.new_A_wave[:, faulty_node_idx] = 0.0
+        self._isolate_gwnet_node_embeddings(faulty_node_idx)
 
-        col = A_wave[:, faulty_node_idx].clone().flatten()
-        col[faulty_node_idx] = float('-inf')
-        in_mask = col.abs() > threshold
-        in_indices = torch.nonzero(in_mask, as_tuple=False).squeeze()
-        in_values = col[in_mask]
-        if in_values.numel() > 0:
-            in_vals, in_idx = torch.topk(in_values, min(top_k_node, in_values.size(0)))
-            in_nodes = in_indices[in_idx]
-        else:
-            in_nodes, in_vals = torch.tensor([]), torch.tensor([])
+        # --- 2. Build full-graph training windows ---
+        full_input, full_target = generate_dataset(
+            dataset, num_timesteps_input, num_timesteps_output
+        )
 
-        if out_nodes.numel() == 0 and in_nodes.numel() > 0:
-            out_nodes = in_nodes
-        if out_nodes.numel() > 0 and in_nodes.numel() == 0:
-            in_nodes = out_nodes
-        if out_nodes.numel() == 0 and in_nodes.numel() == 0:
-            print("The faulty node is not adjacent to any node.")
-            return []
+        # --- 3. Evaluation forget loader: original targets for the faulty node only.
+        #        evaluate.py slices the model output when target has N=1.
+        forget_input_eval = full_input.clone()
+        forget_target_eval = full_target[:, faulty_node_idx:faulty_node_idx + 1, :, :].clone()
+        global forget_loader
+        forget_loader = DataLoader(
+            TensorDataset(forget_input_eval, forget_target_eval),
+            batch_size=batch_size, shuffle=False,
+        )
 
-        retain_data = []
-        for idx in out_nodes:
-            retain_data.append(dataset[idx:idx+1, :, :])
-        forget_data = []
-        for idx in in_nodes:
-            forget_data.append(dataset[idx:idx+1, :, :])
+        # --- 4. Retain loader: faulty node zeroed in both input and target ---
+        retain_input = full_input.clone()
+        retain_target = full_target.clone()
+        retain_input[:, faulty_node_idx, :, :] = 0.0
+        retain_target[:, faulty_node_idx, :, :] = 0.0
+        global retain_loader
+        retain_loader = DataLoader(
+            TensorDataset(retain_input, retain_target),
+            batch_size=batch_size, shuffle=True,
+        )
 
-        all_features = []
-        all_targets = []
-        for item in retain_data:
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output) #(B, N, T, F), (B, N, T, F)
-            feature = feature.float() if isinstance(feature, torch.Tensor) else torch.from_numpy(feature).float()
-            target = target.float() if isinstance(target, torch.Tensor) else torch.from_numpy(target).float()
-            all_features.append(feature)
-            all_targets.append(target)
-        
-        all_features = torch.cat(all_features, dim=0)  # (Total samples, num_vertices, num_timesteps_input, num_features)
-        all_targets = torch.cat(all_targets, dim=0)
-        retain_dataset = TensorDataset(all_features, all_targets)
-        global retain_loader  # For evaluation in main
-        retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True)
+        # --- 5. Surrogate loader: neighbor-informed imputation for the faulty node.
+        #        Input has faulty node masked; target column for faulty node is the
+        #        model's own prediction under the isolated graph, plus multi-scale
+        #        noise so the model cannot re-learn the original pattern.
+        print("Generating surrogate via neighbor-informed imputation...")
+        masked_input = full_input.clone()
+        masked_input[:, faulty_node_idx, :, :] = 0.0
+        self.model.eval()
+        imputed_chunks = []
+        with torch.no_grad():
+            for i in range(0, masked_input.shape[0], batch_size):
+                batch = masked_input[i:i + batch_size].to(self.device)
+                out = self.model(self.new_A_wave, batch)
+                imputed_chunks.append(
+                    out[:, faulty_node_idx:faulty_node_idx + 1, :, :].cpu()
+                )
+        imputed_faulty = torch.cat(imputed_chunks, dim=0)
+        imputed_faulty = imputed_faulty + (
+            torch.randn_like(imputed_faulty) * 0.05
+            + torch.randn_like(imputed_faulty) * 0.10
+        )
+        surrogate_target = full_target.clone()
+        surrogate_target[:, faulty_node_idx:faulty_node_idx + 1, :, :] = imputed_faulty
+        surrogate_loader = DataLoader(
+            TensorDataset(masked_input, surrogate_target),
+            batch_size=batch_size, shuffle=True,
+        )
 
-        all_features = []
-        all_targets = []
-        for item in forget_data:
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
-            feature = feature.float() if isinstance(feature, torch.Tensor) else torch.from_numpy(feature).float()
-            target = target.float() if isinstance(target, torch.Tensor) else torch.from_numpy(target).float()
-            all_features.append(feature)
-            all_targets.append(target)
-        
-        all_features = torch.cat(all_features, dim=0)  # (Total samples, num_vertices, num_timesteps_input, num_features)
-        all_targets = torch.cat(all_targets, dim=0)
-        global forget_loader  # For evaluation in main
-        forget_loader = DataLoader(TensorDataset(all_features, all_targets), batch_size=batch_size, shuffle=True)
-
-        #--- Compute FIM
+        # --- 6. FIM on retain set under the isolated graph ---
         print("Computing Population-Aware FIM...")
         self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
-            self.model, retain_loader, A_wave, max_samples=500
-        )
-        print("Creating surrogate data...")
-        surrogate_data = self.t_gr.perform_temporal_generative_replay_node(
-            self.model, forget_data, faulty_node_idx, num_timesteps_input, num_timesteps_output,
-            self.device, A_wave
+            self.model, retain_loader, self.new_A_wave, max_samples=500
         )
 
-        surrogate_features, surrogate_targets = [], []
-        for item in surrogate_data:
-            if isinstance(item, torch.Tensor):
-                item = item.cpu().numpy()
-                
-            item = item.astype(np.float32)
-            feature, target = generate_dataset(item, num_timesteps_input, num_timesteps_output)
-            feature = feature.float() if isinstance(feature, torch.Tensor) else torch.from_numpy(feature).float()
-            target = target.float() if isinstance(target, torch.Tensor) else torch.from_numpy(target).float()
-            surrogate_features.append(feature)
-            surrogate_targets.append(target)
+        # --- 7. Train with the isolated adjacency ---
+        history = self.training(
+            surrogate_loader, retain_loader, self.new_A_wave,
+            num_epochs, learning_rate,
+            lambda_ewc, lambda_surrogate, lambda_retain,
+        )
 
-        surrogate_features = torch.cat(surrogate_features, dim=0)
-        surrogate_targets = torch.cat(surrogate_targets, dim=0)
-        surrogate_dataset = TensorDataset(surrogate_features, surrogate_targets)
-        surrogate_loader = DataLoader(surrogate_dataset, batch_size=batch_size, shuffle=True)
-
-        return
-
-        history = self.training(surrogate_loader, retain_loader, A_wave, 
-                                num_epochs, learning_rate,
-                                lambda_ewc, lambda_surrogate, lambda_retain)
-        
-        self.new_A_wave[faulty_node_idx, :] = 0
-        self.new_A_wave[:, faulty_node_idx] = 0 
-
-        # dataset_new = copy.deepcopy(dataset)
-        # dataset_new = torch.from_numpy(dataset_new)
-        # dataset_new = torch.cat([dataset_new[:faulty_node_idx], dataset_new[faulty_node_idx+1:]], dim=0)
-
-        """ if not os.path.exists(args.input + f"/Unlearn_node_{faulty_node_idx}"):
-            os.makedirs(args.input + f"/Unlearn_node_{faulty_node_idx}")
-        np.save(args.input + f"/Unlearn_node_{faulty_node_idx}/PEMSBAY.npy", dataset_new.transpose(2, 0, 1))
-        with open(args.input + f"/Unlearn_node_{faulty_node_idx}/adj_mx_bay.pkl", "wb") as f:
-            pickle.dump(A_new, f) """
-
-        return history, dataset
+        return history, retain_loader, forget_loader
 
 
     def training(self, forget_loader, retain_loader, A_wave,
@@ -348,10 +319,10 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
 
     start.record()
     if args.unlearn_node:
-        history = sa_ts.unlearn_faulty_node(
+        history, retain_loader, forget_loader = sa_ts.unlearn_faulty_node(
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
-            top_k_node=2, num_epochs=100, learning_rate=1e-5,
+            num_epochs=100, learning_rate=1e-5,
             lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=64
         )
     else:

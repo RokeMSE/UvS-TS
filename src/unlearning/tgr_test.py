@@ -211,75 +211,77 @@ class TemporalGenerativeReplay:
         
         return [i.transpose(0, 1) for i in surrogate_sample]
     
-    def perform_temporal_generative_replay_node(self, model: nn.Module, 
-                                         dataset,
+    def perform_temporal_generative_replay_node(self, dataset,
                                          faulty_node_idx: int,
-                                         num_timesteps_input,
-                                         num_timesteps_output,
-                                         device,
-                                         A_wave: Optional[torch.Tensor] = None) -> list:
+                                         forget_indices,
+                                         impacts,
+                                         k) -> list:
         """
         Main T-GR function implementing Reconstruction and Neutralization
         
         Params:
-            model: The model being unlearned
-            dataset: Dataset of faulty node
-            forget_indices: Indices to be neutralized
+            dataset: Dataset of faulty node NxTxF
             faulty_node_idx: Index of faulty node
-            num_timesteps_input: number of sample input
-            num_timesteps_output: number of sample output
-            device,
-            A_wave: Graph edges (for STGCN)
+            forget_indices: Indices to be neutralized
+            impacts: impact when remove node 
+            k: number of nodes change
             
         Returns:
             Neutralized surrogate data
         """
-        
-        _, _, timestep = dataset[0].shape
-        forget_indices = [[0, timestep]]
-        surrogate_sample = []
-        print(forget_indices)
-        if self.model_type == "stgcn":
-            for node_dataset in dataset:
-                surrogate_sample.append(self.surrogate(model, node_dataset, forget_indices, faulty_node_idx, 
-                                                             num_timesteps_input, num_timesteps_output, device, A_wave))
-            # (B, N, F, T)
-        else:
-            raise ValueError(f"Unsupported model type: {self.model_type}")
-        
-        surrogate_sample = np.stack(surrogate_sample, axis=0)
-        surrogate_sample = surrogate_sample.mean(axis=0)
-        
-        surrogate_sample = self.add_error_minimizing_noise(
-            surrogate_sample, forget_indices, noise_scale=1.5 # Change accordingly to fit the desired 
-        )
-        
-        return surrogate_sample
+        alpha = 0.8
+        beta = 0.1
+        N, F, T = dataset.shape
+        impacts = np.array(impacts)
 
+        negative_nodes = np.argsort(impacts)[:k]
+        positive_nodes = np.argsort(impacts)[-(k+1):]
 
+        # remove faulty node if somehow included
+        negative_nodes = negative_nodes[
+            negative_nodes != faulty_node_idx
+        ]
 
-# -------------- Example usage function -------------------------
-def create_surrogate_dataset(model: nn.Module, forget_loader: torch.utils.data.DataLoader,
-                           d_f: Union[int, list], model_type: str = "stgcn",
-                           edge_index: Optional[torch.Tensor] = None) -> torch.utils.data.TensorDataset: # edge_index is only for STGCN, it is the adjacency matrix
-    """
-    Create a dataset of surrogate samples for the entire forget set
-    """
-    tgr = TemporalGenerativeReplay(model_type)
-    surrogate_samples = []
-    
-    model.eval()
-    with torch.no_grad():
-        for batch in forget_loader:
-            if isinstance(batch, (list, tuple)):
-                data_batch = batch[0]
-            else:
-                data_batch = batch
-                
-            surrogate_batch = tgr.perform_temporal_generative_replay(
-                model, data_batch, d_f, edge_index
-            )
-            surrogate_samples.append(surrogate_batch)
-    
-    surrogate_data = torch.cat(surrogate_samples, dim=0)
-    return torch.utils.data.TensorDataset(surrogate_data)
+        positive_nodes = positive_nodes[
+            positive_nodes != faulty_node_idx
+        ]
+
+        surrogates = []
+        forget_nodes = []
+        for node in positive_nodes:
+            node_data = []
+            for item in forget_indices:
+                start, end = item[0], item[1]
+                origin_data = dataset[node, :, start:end]
+                origin_data = torch.tensor(origin_data.T, dtype=torch.float32)
+
+                impact_strength = impacts[node]
+                delta = alpha * impact_strength
+                noise_std = beta * abs(impact_strength)
+                noise =torch.randn_like(origin_data) * noise_std
+
+                origin_data = origin_data - delta + noise
+                node_data.append(origin_data)
+
+            surrogates.append(node_data)
+            forget_nodes.append(node)
+
+        for node in negative_nodes:
+            node_data = []
+            for item in forget_indices:
+                start, end = item[0], item[1]
+                origin_data = dataset[node, :, start:end]
+                origin_data = torch.tensor(origin_data.T, dtype=torch.float32)
+
+                impact_strength = impacts[node]
+                delta = alpha * impact_strength
+                noise_std = beta * abs(impact_strength)
+                noise =torch.randn_like(origin_data) * noise_std
+
+                origin_data = origin_data - delta + noise
+                node_data.append(origin_data)
+
+            surrogates.append(node_data)
+            forget_nodes.append(node)
+
+        return surrogates, list(set(forget_nodes))

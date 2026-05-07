@@ -54,7 +54,11 @@ Useful flags: `--epochs`, `--lr`, `--lambda-surr/retain/ewc/forget`, `--forget-m
 
 Evaluation (`evaluate_unlearning`) is called inside steps 2 and 3, so no separate evaluation command is needed.
 
-
+## NOTE
+- Unlearn_subset: Use unlearn_logic_2, replace forget_set by surrogate + early stopping
+- Unlearn node:
+    - unlear_2: Use Linear Structural Model(graph base)
+    - unlearn_3: Use Vector Autoregression + Impulse Response Function(dynamic time series base)
 
 ## Reason of unlearning
 A camera can learn to continuosly to alert the correct situation -> unlearning the wrong signals (suddenly traffic jams on that day due to accidents) -> wrong learn -> wrong prediction -> need unlearn

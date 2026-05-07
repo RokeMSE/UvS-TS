@@ -225,8 +225,8 @@ class UvSTS:
         if surrogate_mode == "patch":
             # Patch only the forget-timestep slots inside forget_target.
             forget_target_patched = replace_target(
-                forget_target_orig.clone(), surrogate_segs, Df_idx,
-                forget_indices, faulty_node_idx, num_timesteps_input,
+                forget_target_orig.clone(), [surrogate_segs], Df_idx,
+                forget_indices, [faulty_node_idx], num_timesteps_input,
             )
             # surrogate_loader = real forget inputs, patched targets
             surrogate_loader = DataLoader(
@@ -238,6 +238,7 @@ class UvSTS:
                 TensorDataset(forget_input, forget_target_orig),
                 batch_size=batch_size, shuffle=True,
             )
+            
         elif surrogate_mode == "self":
             # Legacy path: build synthetic (input, target) from raw segments.
             surr_features, surr_targets = [], []

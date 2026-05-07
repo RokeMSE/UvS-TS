@@ -20,9 +20,10 @@ from utils.filter_forget import filter_forget
 from utils.data_utils import prepare_unlearning_data
 from unlearning.pa_ewc import PopulationAwareEWC
 from unlearning.tgr_test import TemporalGenerativeReplay
-from unlearning.motif_def import discover_motifs_proxy
+from unlearning.motif_def import discover_motifs_proxy, find_forget
 from data.preprocess_pemsbay import get_normalized_adj, generate_dataset
 from utils.replace_surrogate import replace_target, replace_dataset
+from utils.LSM import LSM
 # Import evaluation functions
 from evaluate import evaluate_unlearning
 import sys
@@ -90,14 +91,6 @@ class SATimeSeries:
 
         retain_loader = DataLoader(TensorDataset(retain_input, retain_target), batch_size=batch_size, shuffle=True)
         forget_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
-
-        output_start = window_starts + num_timesteps_input
-        output_times = output_start.unsqueeze(1) + torch.arange(num_timesteps_output).unsqueeze(0)
-        output_forget_mask = torch.zeros(nums_window, num_timesteps_output, dtype=torch.bool)
-        for start, end in forget_indices:
-            output_forget_mask |= (output_times >= start) & (output_times < end)
-
-        forget_output_mask = output_forget_mask[Df_indices]
                 
         # --- Compute FIM
         print("Computing Population-Aware FIM...")
@@ -110,10 +103,10 @@ class SATimeSeries:
         surrogate_data = self.t_gr.perform_temporal_generative_replay_subset(
             self.model, forget_input, forget_indices, faulty_node_idx, num_timesteps_input, num_timesteps_output, self.device, A_wave
         )
-        
-        forget_target = replace_target(forget_target, surrogate_data, Df_indices, forget_indices, faulty_node_idx, num_timesteps_input)
+
+        forget_target = replace_target(forget_target, [surrogate_data], Df_indices, forget_indices, [faulty_node_idx], num_timesteps_input)
         surrogate_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
-        
+
         history = self.training(surrogate_loader, retain_loader, A_wave, 
                                 num_epochs, learning_rate,
                                 lambda_ewc, lambda_surrogate, lambda_retain)
@@ -138,7 +131,7 @@ class SATimeSeries:
         print(f"  [gwnet] zeroed nodevec1[{faulty_node_idx},:] and nodevec2[:,{faulty_node_idx}]")
 
     def unlearn_faulty_node(self, dataset, faulty_node_idx, A_wave, means, stds,
-                            num_timesteps_input, num_timesteps_output,
+                            num_timesteps_input, num_timesteps_output, threshold = 0.5,
                             num_epochs=100, learning_rate=1e-4,
                             lambda_ewc=5.0, lambda_surrogate=1.0, lambda_retain=2.0,
                             batch_size=128):
@@ -153,74 +146,47 @@ class SATimeSeries:
         self._isolate_gwnet_node_embeddings(faulty_node_idx)
 
         # --- 2. Build full-graph training windows ---
-        full_input, full_target = generate_dataset(
-            dataset, num_timesteps_input, num_timesteps_output
-        )
+        train_input, train_target = generate_dataset(dataset, num_timesteps_input, num_timesteps_output)
 
+        forget_indices, retain_indices = find_forget(dataset, faulty_node_idx, threshold=0.8)
+        print(f"Forget samples: {len(forget_indices)}, Retain samples: {len(retain_indices)}")
+        
+        global forget_loader, retain_loader
+
+        if not forget_indices:
+            print("No forget samples found to unlearn. Skipping training.")
+            forget_loader = DataLoader(TensorDataset(torch.empty(0), torch.empty(0))) # Empty dataloader
+            # Create a loader with all training data for retain_loader as nothing is forgotten
+            retain_loader = DataLoader(TensorDataset(train_input, train_target), batch_size=batch_size, shuffle=True)
+            return {'total_loss': [], 'surrogate_loss': [], 'ewc_penalty': [], 'retain_loss': []}
+        
+
+        impacts = LSM(A_wave, faulty_node_idx)
         # --- 3. Evaluation forget loader: original targets for the faulty node only.
         #        evaluate.py slices the model output when target has N=1.
-        forget_input_eval = full_input.clone()
-        forget_target_eval = full_target[:, faulty_node_idx:faulty_node_idx + 1, :, :].clone()
-        global forget_loader
-        forget_loader = DataLoader(
-            TensorDataset(forget_input_eval, forget_target_eval),
-            batch_size=batch_size, shuffle=False,
-        )
+        retain_input, retain_target, Dr_indices, forget_input, forget_target, Df_indices = filter_forget(train_input, train_target, forget_indices, num_timesteps_input, num_timesteps_output)
 
-        # --- 4. Retain loader: faulty node zeroed in both input and target ---
-        retain_input = full_input.clone()
-        retain_target = full_target.clone()
-        retain_input[:, faulty_node_idx, :, :] = 0.0
-        retain_target[:, faulty_node_idx, :, :] = 0.0
-        global retain_loader
-        retain_loader = DataLoader(
-            TensorDataset(retain_input, retain_target),
-            batch_size=batch_size, shuffle=True,
-        )
-
-        # --- 5. Surrogate loader: neighbor-informed imputation for the faulty node.
-        #        Input has faulty node masked; target column for faulty node is the
-        #        model's own prediction under the isolated graph, plus multi-scale
-        #        noise so the model cannot re-learn the original pattern.
-        print("Generating surrogate via neighbor-informed imputation...")
-        masked_input = full_input.clone()
-        masked_input[:, faulty_node_idx, :, :] = 0.0
-        self.model.eval()
-        imputed_chunks = []
-        with torch.no_grad():
-            for i in range(0, masked_input.shape[0], batch_size):
-                batch = masked_input[i:i + batch_size].to(self.device)
-                out = self.model(self.new_A_wave, batch)
-                imputed_chunks.append(
-                    out[:, faulty_node_idx:faulty_node_idx + 1, :, :].cpu()
-                )
-        imputed_faulty = torch.cat(imputed_chunks, dim=0)
-        imputed_faulty = imputed_faulty + (
-            torch.randn_like(imputed_faulty) * 0.05
-            + torch.randn_like(imputed_faulty) * 0.10
-        )
-        surrogate_target = full_target.clone()
-        surrogate_target[:, faulty_node_idx:faulty_node_idx + 1, :, :] = imputed_faulty
-        surrogate_loader = DataLoader(
-            TensorDataset(masked_input, surrogate_target),
-            batch_size=batch_size, shuffle=True,
-        )
-
-        # --- 6. FIM on retain set under the isolated graph ---
+        retain_loader = DataLoader(TensorDataset(retain_input, retain_target), batch_size=batch_size, shuffle=True)
+        forget_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
+                
+        # --- Compute FIM
         print("Computing Population-Aware FIM...")
         self.fim_diagonal = self.pa_ewc.calculate_pa_fim(
-            self.model, retain_loader, self.new_A_wave, max_samples=500
+            self.model, retain_loader, A_wave, max_samples=500
         )
 
-        # --- 7. Train with the isolated adjacency ---
-        history = self.training(
-            surrogate_loader, retain_loader, self.new_A_wave,
-            num_epochs, learning_rate,
-            lambda_ewc, lambda_surrogate, lambda_retain,
-        )
+        # --- Create surrogate data using T-GR
+        print("Creating surrogate data...")
+        surrogate_datas, forget_nodes = self.t_gr.perform_temporal_generative_replay_node(
+            dataset, faulty_node_idx, forget_indices, impacts, k=5)
 
-        return history, retain_loader, forget_loader
+        forget_target = replace_target(forget_target, surrogate_datas, Df_indices, forget_indices, forget_nodes, num_timesteps_input)
+        surrogate_loader = DataLoader(TensorDataset(forget_input, forget_target), batch_size=batch_size, shuffle=True)
 
+        history = self.training(surrogate_loader, retain_loader, self.new_A_wave, 
+                                num_epochs, learning_rate,
+                                lambda_ewc, lambda_surrogate, lambda_retain)
+        
 
     def training(self, forget_loader, retain_loader, A_wave,
                 num_epochs=50, learning_rate=5e-5, 
@@ -321,7 +287,7 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
     if args.unlearn_node:
         history, retain_loader, forget_loader = sa_ts.unlearn_faulty_node(
             train_original_data, args.node_idx, A_wave, means, stds,
-            num_timesteps_input, num_timesteps_output,
+            num_timesteps_input, num_timesteps_output, threshold=0.5,
             num_epochs=100, learning_rate=1e-5,
             lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=64
         )

@@ -187,7 +187,8 @@ class SATimeSeries:
                                 num_epochs, learning_rate,
                                 lambda_ewc, lambda_surrogate, lambda_retain)
         
-
+        return history, retain_loader, forget_loader
+    
     def training(self, forget_loader, retain_loader, A_wave,
                 num_epochs=50, learning_rate=5e-5, 
                 lambda_ewc=10.0, lambda_surrogate=1.0, lambda_retain=1.0):
@@ -289,14 +290,14 @@ def unlearn(model, A_wave, train_original_data, means, stds, num_timesteps_input
             train_original_data, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output, threshold=0.5,
             num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.05, lambda_retain=1.0, batch_size=64
+            lambda_ewc=5.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=64
         )
     else:
         history, retain_loader, forget_loader = sa_ts.unlearn_faulty_subset(
             train_original_data, forget_set, args.node_idx, A_wave, means, stds,
             num_timesteps_input, num_timesteps_output,
             threshold=5, num_epochs=100, learning_rate=1e-5,
-            lambda_ewc=5.0, lambda_surrogate=0.5, lambda_retain=1.0, batch_size=64
+            lambda_ewc=5.0, lambda_surrogate=1.0, lambda_retain=1.0, batch_size=64
         )
     end.record()
     torch.cuda.synchronize()

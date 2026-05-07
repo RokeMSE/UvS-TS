@@ -382,7 +382,7 @@ def generate_comparison_report(all_results, args):
     print("="*80)
     print(df.to_string(index=False))
     
-    save_dir = os.path.join(args.model, f"baselines_node_{args.type}_{args.node_idx}")
+    save_dir = os.path.join(args.model, f"baselines_{'node' if args.unlearn_node else 'subset'}_{args.type}_{args.node_idx}")
     os.makedirs(save_dir, exist_ok=True)
     df.to_csv(os.path.join(save_dir, f"{args.type}_baseline_comparison.csv"), index=False)
     

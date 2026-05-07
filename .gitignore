@@ -6,3 +6,4 @@ frame.txt
 *.pth
 forget_set.json
 /src/data
+train.txt
